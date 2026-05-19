@@ -91,11 +91,13 @@ def otsu_threshold(image):
     return binary.astype(np.uint8) * 255, threshold
 
 
-image = load_grayscale_image("./data/single.JPG")
+if __name__ == "__main__":
 
-show_img(image)
+    image = load_grayscale_image("./data/single.JPG")
 
-blurred = apply_gaussian_blur(image, sigma=1)
-binary, threshold_value = otsu_threshold(blurred)
+    show_img(image)
 
-show_img(binary)
+    blurred = gaussian_filter(image, kernel_size=5, sigma=1)
+    binary, threshold_value = otsu_threshold(blurred)
+
+    show_img(binary)

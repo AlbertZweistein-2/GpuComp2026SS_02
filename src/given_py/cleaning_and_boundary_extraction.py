@@ -126,15 +126,17 @@ def get_external_boundary_mask(binary):
     return boundary
 
 
-binary = load_grayscale_image("binary.png")
-show_img(binary)
+if __name__ == "__main__":
 
-kernel = np.ones((4, 4), dtype=np.uint8)
-# binary should contain values 0 and 255
-cleaned = morphological_open(binary, kernel, iterations=2)
-show_img(cleaned)
+    binary = load_grayscale_image("binary.png")
+    show_img(binary)
 
-boundary = get_external_boundary_mask(cleaned)
-show_img(boundary)
+    kernel = np.ones((4, 4), dtype=np.uint8)
 
-plt.imsave("boundary.png", binary, cmap="gray")
+    cleaned = morphological_open(binary, kernel, iterations=2)
+    show_img(cleaned)
+
+    boundary = get_external_boundary_mask(cleaned)
+    show_img(boundary)
+
+    plt.imsave("boundary.png", boundary, cmap="gray")
