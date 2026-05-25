@@ -4,15 +4,18 @@ from scipy.ndimage import filters
 import numpy as np
 from PIL import Image
 
+
 def load_grayscale_image(image_path):
     image = Image.open(image_path).convert("L")
     return np.array(image)
 
+
 def show_img(img, width=10):
     plt.figure(figsize=(width, width / 1000 * 727))
-    plt.imshow(img, cmap='gray')   
-    plt.axis('off')   
-    plt.show() 
+    plt.imshow(img, cmap="gray")
+    plt.axis("off")
+    plt.show()
+
 
 def erode(image, kernel, iterations=1):
 
@@ -22,17 +25,18 @@ def erode(image, kernel, iterations=1):
 
     for _ in range(iterations):
 
-        padded = np.pad(result, ((pad_h, pad_h), (pad_w, pad_w)), mode='constant')
+        padded = np.pad(result, ((pad_h, pad_h), (pad_w, pad_w)), mode="constant")
         new_image = np.zeros_like(result)
         for i in range(result.shape[0]):
             for j in range(result.shape[1]):
-                region = padded[i:i+kh, j:j+kw]
+                region = padded[i : i + kh, j : j + kw]
 
                 # Erosion: all kernel positions must match foreground
                 if np.all(region[kernel == 1] == 255):
                     new_image[i, j] = 255
         result = new_image
     return result
+
 
 def dilate(image, kernel, iterations=1):
 
@@ -41,11 +45,11 @@ def dilate(image, kernel, iterations=1):
     pad_h, pad_w = kh // 2, kw // 2
 
     for _ in range(iterations):
-        padded = np.pad(result, ((pad_h, pad_h), (pad_w, pad_w)), mode='constant')
+        padded = np.pad(result, ((pad_h, pad_h), (pad_w, pad_w)), mode="constant")
         new_image = np.zeros_like(result)
         for i in range(result.shape[0]):
             for j in range(result.shape[1]):
-                region = padded[i:i+kh, j:j+kw]
+                region = padded[i : i + kh, j : j + kw]
 
                 # Dilation: any kernel position matches foreground
                 if np.any(region[kernel == 1] == 255):
@@ -53,6 +57,7 @@ def dilate(image, kernel, iterations=1):
         result = new_image
 
     return result
+
 
 def morphological_open(image, kernel, iterations=1):
     eroded = erode(image, kernel, iterations)
@@ -106,11 +111,7 @@ def get_external_boundary_mask(binary):
 
     boundary = np.zeros((h, w), dtype=np.uint8)
 
-    neighbors8 = [
-        (-1,-1), (-1,0), (-1,1),
-        (0,-1),          (0,1),
-        (1,-1),  (1,0),  (1,1)
-    ]
+    neighbors8 = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
     for y in range(h):
         for x in range(w):
@@ -139,4 +140,16 @@ if __name__ == "__main__":
     boundary = get_external_boundary_mask(cleaned)
     show_img(boundary)
 
-    plt.imsave("boundary.png", boundary, cmap="gray")
+    import os
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    test_data_dir = os.path.join(
+        script_dir, "../../data/test_data/cleaning_and_boundary_extraction"
+    )
+    os.makedirs(test_data_dir, exist_ok=True)
+
+    plt.imsave(
+        os.path.join(test_data_dir, "get_external_boundary_mask.png"),
+        boundary,
+        cmap="gray",
+    )

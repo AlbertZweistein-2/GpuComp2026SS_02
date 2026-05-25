@@ -4,30 +4,32 @@ from scipy.ndimage import filters
 import numpy as np
 from PIL import Image
 
+
 def load_grayscale_image(image_path):
     image = Image.open(image_path).convert("L")
     return np.array(image)
 
+
 def show_img(img, width=10):
     plt.figure(figsize=(width, width / 1000 * 727))
-    plt.imshow(img, cmap='gray')   
-    plt.axis('off')   
-    plt.show() 
+    plt.imshow(img, cmap="gray")
+    plt.axis("off")
+    plt.show()
 
 
 # Clockwise neighbors
 
 DIRECTIONS = [
-    (0, 1),    # right
-    (1, 1),    # down-right
-    (1, 0),    # down
-    (1, -1),   # down-left
-    (0, -1),   # left
+    (0, 1),  # right
+    (1, 1),  # down-right
+    (1, 0),  # down
+    (1, -1),  # down-left
+    (0, -1),  # left
     (-1, -1),  # up-left
-    (-1, 0),   # up
-    (-1, 1)    # up-right
-
+    (-1, 0),  # up
+    (-1, 1),  # up-right
 ]
+
 
 def trace_contour(boundary):
 
@@ -56,11 +58,7 @@ def trace_contour(boundary):
             ny = current[0] + dy
             nx = current[1] + dx
 
-            if (
-                0 <= ny < h and
-                0 <= nx < w and
-                boundary[ny, nx]
-            ):
+            if 0 <= ny < h and 0 <= nx < w and boundary[ny, nx]:
 
                 next_point = (ny, nx)
                 if next_point == start and len(contour) > 10:
@@ -79,6 +77,7 @@ def trace_contour(boundary):
 
     return contour
 
+
 def simplify_chain_approx(contour):
 
     if len(contour) <= 2:
@@ -86,10 +85,10 @@ def simplify_chain_approx(contour):
 
     simplified = [contour[0]]
 
-    for i in range(1, len(contour)-1):
-        y0, x0 = contour[i-1]
+    for i in range(1, len(contour) - 1):
+        y0, x0 = contour[i - 1]
         y1, x1 = contour[i]
-        y2, x2 = contour[i+1]
+        y2, x2 = contour[i + 1]
         dx1 = np.sign(x1 - x0)
         dy1 = np.sign(y1 - y0)
         dx2 = np.sign(x2 - x1)
@@ -102,9 +101,10 @@ def simplify_chain_approx(contour):
     simplified.append(contour[-1])
     return simplified
 
+
 def find_contour_chain_approx_simple(boundary):
 
-    #boundary = get_external_boundary(binary)
+    # boundary = get_external_boundary(binary)
     contour = trace_contour(boundary)
     contour = simplify_chain_approx(contour)
 
@@ -112,24 +112,25 @@ def find_contour_chain_approx_simple(boundary):
     contour = np.array([(x, y) for y, x in contour])
     return contour
 
+
 def smooth_contour(points, window=15):
     pts = np.array(points, dtype=float)
-    xs = pts[:,0]
-    ys = pts[:,1]
+    xs = pts[:, 0]
+    ys = pts[:, 1]
 
     # Circular padding (important for closed contours)
     pad = window // 2
-    xs_pad = np.pad(xs, (pad, pad), mode='wrap')
-    ys_pad = np.pad(ys, (pad, pad), mode='wrap')
+    xs_pad = np.pad(xs, (pad, pad), mode="wrap")
+    ys_pad = np.pad(ys, (pad, pad), mode="wrap")
     kernel = np.ones(window) / window
-    xs_smooth = np.convolve(xs_pad, kernel, mode='valid')
-    ys_smooth = np.convolve(ys_pad, kernel, mode='valid')
+    xs_smooth = np.convolve(xs_pad, kernel, mode="valid")
+    ys_smooth = np.convolve(ys_pad, kernel, mode="valid")
     smooth_points = [
-        (int(round(x)), int(round(y)))
-        for x, y in zip(xs_smooth, ys_smooth)
+        (int(round(x)), int(round(y))) for x, y in zip(xs_smooth, ys_smooth)
     ]
 
     return smooth_points
+
 
 def enclosing_circle_approx(points):
 
@@ -142,21 +143,24 @@ def enclosing_circle_approx(points):
     cx = (min_x + max_x) / 2
     cy = (min_y + max_y) / 2
 
-    distances = np.sqrt((pts[:, 0] - cx)**2 + (pts[:, 1] - cy)**2)
+    distances = np.sqrt((pts[:, 0] - cx) ** 2 + (pts[:, 1] - cy) ** 2)
     radius = np.max(distances)
     return (cx, cy), radius
+
 
 def radial_signal(points, center):
     cx, cy = center
     signal = []
     for x, y in points:
-        d = np.sqrt((x - cx)**2 + (y - cy)**2)
+        d = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
         signal.append(d)
     return signal
 
-def find_triangular_peaks(signal, min_distance=10, min_prominence=10, smooth_window=21, min_sharpness=20):
+
+def find_triangular_peaks(
+    signal, min_distance=10, min_prominence=10, smooth_window=21, min_sharpness=20
+):
     signal = np.asarray(signal, dtype=float)
-    
 
     # Smooth
     # kernel = np.ones(smooth_window) / smooth_window
@@ -169,11 +173,7 @@ def find_triangular_peaks(signal, min_distance=10, min_prominence=10, smooth_win
 
     # Detect ONLY local maxima
 
-    peaks_idx, props = find_peaks(
-        s,
-        distance=min_distance,
-        prominence=min_prominence
-    )
+    peaks_idx, props = find_peaks(s, distance=min_distance, prominence=min_prominence)
 
     selected = []
 
@@ -191,15 +191,48 @@ def find_triangular_peaks(signal, min_distance=10, min_prominence=10, smooth_win
 
     return list(selected), [signal[i] for i in selected], s
 
+
 if __name__ == "__main__":
-    boundary = load_grayscale_image("boundary.png")
+    import os
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    test_data_dir = os.path.join(script_dir, "../../data/test_data/contour_to_signal")
+    os.makedirs(test_data_dir, exist_ok=True)
+
+    input_img_path = os.path.join(
+        script_dir,
+        "../../data/test_data/cleaning_and_boundary_extraction/get_external_boundary_mask.png",
+    )
+    boundary = load_grayscale_image(input_img_path)
+    np.savetxt(
+        os.path.join(test_data_dir, "boundary_input.csv"),
+        boundary,
+        fmt="%d",
+        delimiter=",",
+    )
     show_img(boundary)
 
     contour = find_contour_chain_approx_simple(boundary)
+    np.savetxt(
+        os.path.join(test_data_dir, "find_contour_chain_approx_simple.csv"),
+        contour,
+        fmt="%d",
+        delimiter=",",
+    )
     points = [(int(x), int(y)) for x, y in contour]
 
     smooth_points = smooth_contour(points, window=5)
+    np.savetxt(
+        os.path.join(test_data_dir, "smooth_contour.csv"),
+        smooth_points,
+        fmt="%d",
+        delimiter=",",
+    )
+
     center, radius = enclosing_circle_approx(smooth_points)
+    with open(os.path.join(test_data_dir, "enclosing_circle_approx.txt"), "w") as f:
+        f.write(f"{center[0]},{center[1]}\n{radius}\n")
+
     print("center:", center)
     print("radius", radius)
 
@@ -232,10 +265,15 @@ if __name__ == "__main__":
 
     # Draw center
     ax.scatter(center[0], center[1], s=30)
-    plt.savefig("contour_circle.png", bbox_inches="tight", pad_inches=0, dpi=300)
     plt.show()
 
     signal = radial_signal(smooth_points, center)
+    np.savetxt(
+        os.path.join(test_data_dir, "radial_signal.csv"),
+        signal,
+        fmt="%.6f",
+        delimiter=",",
+    )
 
     plt.figure(figsize=(12, 4))
     plt.plot(signal)
@@ -246,34 +284,31 @@ if __name__ == "__main__":
     plt.show()
 
     peaks_idx, peaks_val, smooth = find_triangular_peaks(
-        signal,
-        min_distance=5,
-        min_prominence=5,
-        smooth_window=2,
-        min_sharpness=20
+        signal, min_distance=5, min_prominence=5, smooth_window=2, min_sharpness=20
     )
 
     peaks_idx = [x for x in peaks_idx if x != 1]
     peaks_val = [signal[i] for i in peaks_idx]
 
-    # Remove first peak
-    #peaks_idx = peaks_idx[1:]
-    # Recompute values
-    #peaks_val = [signal[i] for i in peaks_idx]
+    np.savetxt(
+        os.path.join(test_data_dir, "find_triangular_peaks.csv"),
+        peaks_idx,
+        fmt="%d",
+        delimiter=",",
+    )
 
-    plt.figure(figsize=(14,5))
+    # Remove first peak
+    # peaks_idx = peaks_idx[1:]
+    # Recompute values
+    # peaks_val = [signal[i] for i in peaks_idx]
+
+    plt.figure(figsize=(14, 5))
     plt.plot(signal)
 
-    plt.scatter(
-        peaks_idx,
-        peaks_val,
-        marker='o'
-
-    )
+    plt.scatter(peaks_idx, peaks_val, marker="o")
 
     plt.grid(True)
     plt.show()
-
 
     fig, ax = plt.subplots(figsize=(10, 10 / 1000 * 727))
     ax.imshow(display_boundary, cmap="gray", vmin=0, vmax=255)
@@ -294,5 +329,4 @@ if __name__ == "__main__":
     px = [p[0] for p in peak_points]
     py = [p[1] for p in peak_points]
     ax.scatter(px, py, s=80, color="red")
-    plt.savefig("contour_circle_peaks.png", bbox_inches="tight", pad_inches=0, dpi=300)
     plt.show()

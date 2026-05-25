@@ -164,7 +164,8 @@ std::vector<float> radial_signal(const std::vector<Coordinate>& points, Coordina
     for (size_t i = 0; i < points.size(); ++i) {
         float dx = points[i].a - center.a;
         float dy = points[i].b - center.b;
-        signal[i] = std::sqrt(dx * dx + dy * dy
+        signal[i] = std::sqrt(dx * dx + dy * dy);
+    }
 
     return signal;
 }
