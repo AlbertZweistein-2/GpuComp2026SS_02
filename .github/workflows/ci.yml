@@ -1,0 +1,26 @@
+name: C++ Serial Tests
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    name: Build and Run C++ Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compile test_runner
+        working-directory: src/serial_cpp
+        # Compiling with standard C++17 to ensure it works identically across all modern g++ versions
+        run: g++ -std=c++17 test_main.cpp contour_to_signal.cpp -o test_runner
+        
+      - name: Run test_runner
+        working-directory: src/serial_cpp
+        # Tests will fail if any assert() is triggered
+        run: ./test_runner
