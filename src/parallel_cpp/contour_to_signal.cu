@@ -167,6 +167,36 @@ std::vector<Coordinate> find_contour_chain_approx_simple(const std::vector<uint8
     return contour;
 }
 
+// Thrust functors for computing min and max
+struct compare_x
+{
+    __host__ __device__ bool operator()(const Coordinate &lhs, const Coordinate &rhs) const
+    {
+        return lhs.a < rhs.a;
+    }
+};
+struct compare_y
+{
+    __host__ __device__ bool operator()(const Coordinate &lhs, const Coordinate &rhs) const
+    {
+        return lhs.b < rhs.b;
+    }
+};
+// Thrust functor for the square distance transformation
+struct square_distance
+{
+    float cx, cy;
+
+    square_distance(float _cx, float _cy) : cx(_cx), cy(_cy) {}
+
+    __host__ __device__ float operator()(const Coordinate &p) const
+    {
+        float dx = p.a - cx;
+        float dy = p.b - cy;
+        return dx * dx + dy * dy;
+    }
+};
+
 std::pair<CoordinateFloat, float> enclosing_circle_approx(const std::vector<Coordinate> &points)
 {
     if (points.empty())
@@ -179,39 +209,58 @@ std::pair<CoordinateFloat, float> enclosing_circle_approx(const std::vector<Coor
     int min_y = points[0].b;
     int max_y = points[0].b;
 
-    for (size_t i = 1; i < points.size(); ++i)
-    {
-        min_x = std::min(min_x, points[i].a);
-        max_x = std::max(max_x, points[i].a);
-        min_y = std::min(min_y, points[i].b);
-        max_y = std::max(max_y, points[i].b);
-    }
+    thrust::device_vector<Coordinate> d_points(points.begin(), points.end());
+
+    auto minmax_x = thrust::minmax_element(d_points.begin(), d_points.end(), compare_x());
+    auto minmax_y = thrust::minmax_element(d_points.begin(), d_points.end(), compare_y());
+
+    Coordinate cx_min = *(minmax_x.first);
+    Coordinate cx_max = *(minmax_x.second);
+    Coordinate cy_min = *(minmax_y.first);
+    Coordinate cy_max = *(minmax_y.second);
+
+    min_x = cx_min.a;
+    max_x = cx_max.a;
+    min_y = cy_min.b;
+    max_y = cy_max.b;
 
     float cx = (min_x + max_x) / 2.0f;
     float cy = (min_y + max_y) / 2.0f;
 
-    float max_sq_dist = 0.0f;
-    for (size_t i = 0; i < points.size(); ++i)
-    {
-        float dx = points[i].a - cx;
-        float dy = points[i].b - cy;
-        max_sq_dist = std::max(max_sq_dist, dx * dx + dy * dy);
-    }
+    float max_sq_dist = thrust::transform_reduce(
+        d_points.begin(),
+        d_points.end(),
+        square_distance(cx, cy), // Transform functor
+        0.0f,                    // Starting value
+        thrust::maximum<float>() // Reduction operation
+    );
 
     float radius = std::sqrt(max_sq_dist);
     return std::make_pair(CoordinateFloat{cx, cy}, radius);
 }
 
-std::vector<float> radial_signal(const std::vector<Coordinate> &points, CoordinateFloat center)
+__global__ void radial_signal_kernel(const Coordinate *points, float *signal, int num_points, CoordinateFloat center)
 {
-    std::vector<float> signal(points.size());
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
 
-    for (size_t i = 0; i < points.size(); ++i)
+    if (i < num_points)
     {
         float dx = points[i].a - center.a;
         float dy = points[i].b - center.b;
-        signal[i] = std::sqrt(dx * dx + dy * dy);
+        signal[i] = sqrtf(dx * dx + dy * dy);
     }
+}
 
+std::vector<float> radial_signal(const std::vector<Coordinate> &points, CoordinateFloat center)
+{
+    std::vector<float> signal(points.size());
+    thrust::device_vector<float> d_signal(points.size());
+    thrust::device_vector<Coordinate> d_points(points.begin(), points.end());
+
+    int threads_per_block = 256;
+    int num_blocks = 256;
+    radial_signal_kernel<<<num_blocks, threads_per_block>>>(thrust::raw_pointer_cast(d_points.data()), thrust::raw_pointer_cast(d_signal.data()), points.size(), center);
+
+    thrust::copy(d_signal.begin(), d_signal.end(), signal.begin());
     return signal;
 }
