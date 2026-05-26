@@ -41,4 +41,5 @@ jobs:
         working-directory: src/serial_cpp
         # We can only test cuda files by compiling them with nvcc
         # As there are no GPUs on GitHub Actions Servers
-        run: nvcc -std=c++17 test_main.cpp ../parallel_cpp/contour_to_signal.cu -o cuda_test_runner
+        # Replace cpp file with cu file when ready, as we use the same test_main.cpp for both 
+        run: nvcc -std=c++17 test_main.cpp ../parallel_cpp/contour_to_signal.cu cleaning_and_boundary_extraction.cpp -o cuda_test_runner
