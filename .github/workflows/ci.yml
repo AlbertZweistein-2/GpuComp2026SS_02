@@ -18,7 +18,7 @@ jobs:
       - name: Compile test_runner
         working-directory: src/serial_cpp
         # Compiling with standard C++17 to ensure it works identically across all modern g++ versions
-        run: g++ -std=c++17 test_main.cpp contour_to_signal.cpp -o test_runner
+        run: g++ -std=c++17 test_main.cpp contour_to_signal.cpp cleaning_and_boundary_extraction.cpp -o test_runner
         
       - name: Run test_runner
         working-directory: src/serial_cpp
