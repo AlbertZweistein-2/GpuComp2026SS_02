@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cmath>
+#include "cleaning_and_boundary_extraction.hpp"
 
 struct Coordinate {
     int a;
@@ -188,12 +189,196 @@ void test_radial_signal() {
     std::cout << "test_radial_signal passed! (" << actual_signal.size() << " floats match)" << std::endl;
 }
 
+bool same_image_u8(const ImageU8& a, const ImageU8& b) {
+    return a == b;
+}
+
+void test_erode() {
+    std::cout << "Running test_erode..." << std::endl;
+
+    ImageU8 image = {
+        {0,   0,   0,   0,   0,   0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0,   0,   0,   0,   0,   0}
+    };
+
+    ImageU8 kernel = {
+        {1,1,1},
+        {1,1,1},
+        {1,1,1}
+    };
+
+    ImageU8 expected = {
+        {0, 0,   0,   0,   0, 0},
+        {0, 0,   0,   0,   0, 0},
+        {0, 0, 255, 255,   0, 0},
+        {0, 0, 255, 255,   0, 0},
+        {0, 0,   0,   0,   0, 0},
+        {0, 0,   0,   0,   0, 0}
+    };
+
+    assert(same_image_u8(erode(image, kernel, 1), expected));
+    std::cout << "test_erode passed!" << std::endl;
+}
+
+void test_dilate() {
+    std::cout << "Running test_dilate..." << std::endl;
+
+    ImageU8 image = {
+        {0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0},
+        {0, 0, 255, 0, 0},
+        {0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 0}
+    };
+
+    ImageU8 kernel = {
+        {1,1,1},
+        {1,1,1},
+        {1,1,1}
+    };
+
+    ImageU8 expected = {
+        {0,   0,   0,   0, 0},
+        {0, 255, 255, 255, 0},
+        {0, 255, 255, 255, 0},
+        {0, 255, 255, 255, 0},
+        {0,   0,   0,   0, 0}
+    };
+
+    assert(same_image_u8(dilate(image, kernel, 1), expected));
+    std::cout << "test_dilate passed!" << std::endl;
+}
+
+void test_morphological_open() {
+    std::cout << "Running test_morphological_open..." << std::endl;
+
+    ImageU8 image = {
+        {0,   0,   0,   0,   0, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0,   0,   0,   0,   0, 0}
+    };
+
+    ImageU8 kernel = {
+        {1,1,1},
+        {1,1,1},
+        {1,1,1}
+    };
+
+    assert(same_image_u8(morphological_open(image, kernel, 1), image));
+    std::cout << "test_morphological_open passed!" << std::endl;
+}
+
+void test_get_external_boundary_mask() {
+    std::cout << "Running test_get_external_boundary_mask..." << std::endl;
+
+    ImageU8 image = {
+        {0,   0,   0,   0,   0, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0,   0,   0,   0,   0, 0}
+    };
+
+    ImageU8 expected = {
+        {0,   0,   0,   0,   0, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0, 255,   0,   0, 255, 0},
+        {0, 255,   0,   0, 255, 0},
+        {0, 255, 255, 255, 255, 0},
+        {0,   0,   0,   0,   0, 0}
+    };
+
+    assert(same_image_u8(get_external_boundary_mask(image), expected));
+    std::cout << "test_get_external_boundary_mask passed!" << std::endl;
+}
+
+void test_connected_components() {
+    std::cout << "Running test_connected_components..." << std::endl;
+
+    ImageU8 image = {
+        {0,   0,   0,   0,   0, 0},
+        {0, 255, 255,   0,   0, 0},
+        {0, 255, 255,   0, 255, 0},
+        {0,   0,   0,   0, 255, 0},
+        {0, 255, 255,   0,   0, 0},
+        {0, 255, 255,   0,   0, 0}
+    };
+
+    auto [labels, regions] = connected_components(image, 3);
+
+    ImageI32 expected_labels = {
+        {0, 0, 0, 0, 0, 0},
+        {0, 1, 1, 0, 0, 0},
+        {0, 1, 1, 0, 0, 0},
+        {0, 0, 0, 0, 0, 0},
+        {0, 2, 2, 0, 0, 0},
+        {0, 2, 2, 0, 0, 0}
+    };
+
+    assert(labels == expected_labels);
+    assert(regions.size() == 2);
+
+    assert(regions[0].label == 1);
+    assert(regions[0].area == 4);
+    assert(regions[0].x == 1);
+    assert(regions[0].y == 1);
+    assert(regions[0].width == 2);
+    assert(regions[0].height == 2);
+
+    assert(regions[1].label == 2);
+    assert(regions[1].area == 4);
+    assert(regions[1].x == 1);
+    assert(regions[1].y == 4);
+    assert(regions[1].width == 2);
+    assert(regions[1].height == 2);
+
+    std::cout << "test_connected_components passed!" << std::endl;
+}
+
+void test_extract_piece_mask() {
+    std::cout << "Running test_extract_piece_mask..." << std::endl;
+
+    ImageI32 labels = {
+        {0, 0, 0, 0, 0},
+        {0, 1, 1, 0, 2},
+        {0, 1, 1, 0, 2},
+        {0, 0, 0, 3, 3}
+    };
+
+    ImageU8 expected = {
+        {0, 0, 0, 0, 0},
+        {0, 0, 0, 0, 255},
+        {0, 0, 0, 0, 255},
+        {0, 0, 0, 0, 0}
+    };
+
+    assert(same_image_u8(extract_piece_mask(labels, 2), expected));
+    std::cout << "test_extract_piece_mask passed!" << std::endl;
+}
+
+
+
 int main() {
     test_trace_contour();
     test_simplify_chain_approx();
     test_find_contour_chain_approx_simple();
     test_enclosing_circle_approx();
     test_radial_signal();
+
+    test_erode();
+    test_dilate();
+    test_morphological_open();
+    test_get_external_boundary_mask();
+    test_connected_components();
+    test_extract_piece_mask();
     std::cout << "All tests passed successfully!" << std::endl;
     return 0;
 }
