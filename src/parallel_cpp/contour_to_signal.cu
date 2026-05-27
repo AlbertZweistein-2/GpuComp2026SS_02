@@ -154,15 +154,24 @@ std::vector<Coordinate> simplify_chain_approx(const std::vector<Coordinate> &con
     return simplified;
 }
 
+struct swap_and_b
+{
+    __host__ __device__ Coordinate operator()(const Coordinate &c) const
+    {
+        return Coordinate{c.b, c.a};
+    }
+};
+
 std::vector<Coordinate> find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height)
 {
     std::vector<Coordinate> contour = trace_contour(boundary, width, height);
     contour = simplify_chain_approx(contour);
 
-    for (size_t i = 0; i < contour.size(); ++i)
-    {
-        std::swap(contour[i].a, contour[i].b);
-    }
+    // swapping coordinates from (y, x) to (x, y)
+    // just like in the original python code
+    thrust::device_vector<Coordinate> d_contour = contour;
+    thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_and_b());
+    thrust::copy(d_contour.begin(), d_contour.end(), contour.begin());
 
     return contour;
 }
@@ -214,6 +223,7 @@ std::pair<CoordinateFloat, float> enclosing_circle_approx(const std::vector<Coor
     auto minmax_x = thrust::minmax_element(d_points.begin(), d_points.end(), compare_x());
     auto minmax_y = thrust::minmax_element(d_points.begin(), d_points.end(), compare_y());
 
+    // copying back from device to host
     Coordinate cx_min = *(minmax_x.first);
     Coordinate cx_max = *(minmax_x.second);
     Coordinate cy_min = *(minmax_y.first);
