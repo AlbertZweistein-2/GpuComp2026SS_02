@@ -9,3 +9,15 @@ venv/
 *.out
 *.exe
 test_runner
+
+# Jupyter Checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Kompilierte Binaries
+preprocessing_serial
+preprocessing
+
+# Ausgabebilder (optional, falls ihr die nicht tracken wollt)
+binary_output_serial.png
+binary_output.png
