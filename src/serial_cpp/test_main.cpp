@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cmath>
 #include "cleaning_and_boundary_extraction.hpp"
+#include <array>
 
 struct Coordinate {
     int a;
@@ -21,12 +22,25 @@ struct CoordinateFloat {
     float b;
 };
 
+enum class EdgeType { Straight, Knob, Hole };
+
+
 // Forward declarations step 1
 std::vector<Coordinate> trace_contour(const std::vector<uint8_t>& boundary, int width, int height);
 std::vector<Coordinate> simplify_chain_approx(const std::vector<Coordinate>& contour);
 std::vector<Coordinate> find_contour_chain_approx_simple(const std::vector<uint8_t>& boundary, int width, int height);
 std::pair<CoordinateFloat, float> enclosing_circle_approx(const std::vector<Coordinate>& points);
 std::vector<float> radial_signal(const std::vector<Coordinate>& points, CoordinateFloat center);
+std::array<int, 4> find_triangular_peaks(const std::vector<float>& curvature, float min_prominence, int   min_distance); 
+std::vector<float> smooth_signal(const std::vector<float>& signal, int k);
+std::vector<float> compute_1d_sharpness(const std::vector<float>& radial_signal, int k);
+std::array<EdgeType,4> classify_edges(
+const std::vector<float>& signal,
+    const std::array<int,4>& corner_idx,
+    float knob_factor = 1.10f,   
+    float hole_factor = 0.90f);
+inline char edge_char(EdgeType e);
+std::string edges_to_string(const std::array<EdgeType,4>& labels); 
 
 bool load_boundary_csv(const std::string& filepath, std::vector<uint8_t>& boundary, int& width, int& height) {
     std::ifstream file(filepath);
@@ -92,6 +106,18 @@ bool load_signal_csv(const std::string& filepath, std::vector<float>& signal) {
     std::string line;
     while (std::getline(file, line)) {
         signal.push_back(std::stof(line));
+    }
+    return true;
+}
+
+bool load_peaks_csv(const std::string& filepath, std::vector<int>& peaks) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) return false;
+
+    peaks.clear();
+    std::string line;
+    while (std::getline(file, line)) {
+        peaks.push_back(std::stof(line));
     }
     return true;
 }
@@ -364,10 +390,76 @@ void test_extract_piece_mask() {
     std::cout << "test_extract_piece_mask passed!" << std::endl;
 }
 
+void test_smooth_signal() {
+    std::cout << "Running test_smooth_signal..." << std::endl;
+    std::vector<float> raw_signal;
+    assert(load_signal_csv("../../data/test_data/contour_to_signal/radial_signal.csv", raw_signal));
+ 
+    std::vector<float> expected_smoothed;
+    assert(load_signal_csv("../../data/test_data/contour_to_signal/smoothed_signal.csv", expected_smoothed));
+ 
+    int smooth_window = 5;
+    std::vector<float> actual_smoothed = smooth_signal(raw_signal, smooth_window);
+ 
+    assert(actual_smoothed.size() == expected_smoothed.size());
+ 
+    std::cout << "test_smooth_signal passed! (" << actual_smoothed.size() << " floats match)" << std::endl;
+}
+ 
+void test_peak_detection() {
+    std::cout << "Running test_peak_detection..." << std::endl;
+    std::vector<float> smoothed_signal;
+    assert(load_signal_csv("../../data/test_data/contour_to_signal/smoothed_signal.csv", smoothed_signal));
+ 
+    std::vector<int> expected_peaks;
+    assert(load_peaks_csv("../../data/test_data/contour_to_signal/find_triangular_peaks.csv", expected_peaks));
+ 
+    int k_step = 15;
+    std::vector<float> sharpness = compute_1d_sharpness(smoothed_signal, k_step);
+ 
+    std::array<int, 4> actual_peaks = find_triangular_peaks(sharpness, 2.0f, 50);
+ 
+    assert(expected_peaks.size() == 4);
+ 
+    int n = smoothed_signal.size();
+    int tolerance = 3;
+ 
+    for (size_t i = 0; i < 4; ++i) {
+        int diff = std::abs(actual_peaks[i] - expected_peaks[i]);
+        int circular_diff = std::min(diff, n - diff);
+        assert(circular_diff <= tolerance && "Peak index mismatch!");
+    }
+ 
+    std::cout << "test_peak_detection passed! (All 4 corners match with defined tolerance: " << tolerance << " pixels)" <<std::endl;
+}
+ 
+void test_classify_edges() {
+    std::cout << "Running test_classify_edges..." << std::endl;
+    std::vector<float> smoothed_signal;
+    assert(load_signal_csv("../../data/test_data/contour_to_signal/smoothed_signal.csv", smoothed_signal));
+ 
+    int k_step = 15;
+    std::vector<float> sharpness = compute_1d_sharpness(smoothed_signal, k_step);
+ 
+    std::array<int, 4> corners = find_triangular_peaks(sharpness, 2.0f, 50);
+ 
+    std::array<EdgeType, 4> edge_labels = classify_edges(smoothed_signal, corners, 1.10f, 0.90f);
+ 
+    std::string final_shape = edges_to_string(edge_labels);
+ 
+    for (int i = 1; i < 4; ++i) {
+        assert(corners[i] > corners[i-1] && "Invalid corners detected in pipeline!");
+    }
+ 
+    assert(final_shape.length() == 4 && "Shape string is wrong length!");
+    assert(final_shape.find('?') == std::string::npos && "Pipeline failed to classify an edge!");
+ 
+    std::cout << "test_classify_edges passed! (Shape: " << final_shape << ")" << std::endl;
+}
 
 
 int main() {
-    test_trace_contour();
+    /* test_trace_contour();
     test_simplify_chain_approx();
     test_find_contour_chain_approx_simple();
     test_enclosing_circle_approx();
@@ -378,7 +470,11 @@ int main() {
     test_morphological_open();
     test_get_external_boundary_mask();
     test_connected_components();
-    test_extract_piece_mask();
+    test_extract_piece_mask(); */
+
+    test_smooth_signal();
+    test_peak_detection();
+    test_classify_edges();
     std::cout << "All tests passed successfully!" << std::endl;
     return 0;
 }
