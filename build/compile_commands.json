@@ -1,0 +1,44 @@
+[
+{
+  "directory": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/build",
+  "command": "/usr/bin/g++  -I/home/tobiasponeschtu/Documents/GpuComp2026SS_02/include -g -std=c++17 -o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/preprocessing.cpp.o -c /home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/preprocessing.cpp",
+  "file": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/preprocessing.cpp",
+  "output": "CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/preprocessing.cpp.o"
+},
+{
+  "directory": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/build",
+  "command": "/usr/bin/g++  -I/home/tobiasponeschtu/Documents/GpuComp2026SS_02/include -g -std=c++17 -o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/cleaning.cpp.o -c /home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/cleaning.cpp",
+  "file": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/cleaning.cpp",
+  "output": "CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/cleaning.cpp.o"
+},
+{
+  "directory": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/build",
+  "command": "/usr/bin/g++  -I/home/tobiasponeschtu/Documents/GpuComp2026SS_02/include -g -std=c++17 -o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/boundary_extraction.cpp.o -c /home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/boundary_extraction.cpp",
+  "file": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/boundary_extraction.cpp",
+  "output": "CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/boundary_extraction.cpp.o"
+},
+{
+  "directory": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/build",
+  "command": "/usr/bin/g++  -I/home/tobiasponeschtu/Documents/GpuComp2026SS_02/include -g -std=c++17 -o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/component_labeling.cpp.o -c /home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/component_labeling.cpp",
+  "file": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/component_labeling.cpp",
+  "output": "CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/component_labeling.cpp.o"
+},
+{
+  "directory": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/build",
+  "command": "/usr/bin/g++  -I/home/tobiasponeschtu/Documents/GpuComp2026SS_02/include -g -std=c++17 -o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/contour_to_signal.cpp.o -c /home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/contour_to_signal.cpp",
+  "file": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/serial_cpp/contour_to_signal.cpp",
+  "output": "CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/contour_to_signal.cpp.o"
+},
+{
+  "directory": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/build",
+  "command": "/usr/bin/g++  -I/home/tobiasponeschtu/Documents/GpuComp2026SS_02/include -g -std=c++17 -o CMakeFiles/pipeline_core.dir/src/pipeline.cpp.o -c /home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/pipeline.cpp",
+  "file": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/pipeline.cpp",
+  "output": "CMakeFiles/pipeline_core.dir/src/pipeline.cpp.o"
+},
+{
+  "directory": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/build",
+  "command": "/usr/bin/g++ -DPIPELINE_BUILD_STANDALONE -I/home/tobiasponeschtu/Documents/GpuComp2026SS_02/include -g -std=c++17 -o CMakeFiles/pipeline.dir/src/pipeline.cpp.o -c /home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/pipeline.cpp",
+  "file": "/home/tobiasponeschtu/Documents/GpuComp2026SS_02/src/pipeline.cpp",
+  "output": "CMakeFiles/pipeline.dir/src/pipeline.cpp.o"
+}
+]

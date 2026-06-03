@@ -1,0 +1,2 @@
+/usr/bin/ar qc libserial_pipeline_modules.a CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/preprocessing.cpp.o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/cleaning.cpp.o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/boundary_extraction.cpp.o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/component_labeling.cpp.o CMakeFiles/serial_pipeline_modules.dir/src/serial_cpp/contour_to_signal.cpp.o
+/usr/bin/ranlib libserial_pipeline_modules.a

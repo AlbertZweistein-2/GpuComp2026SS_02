@@ -1,3 +1,5 @@
+// Coordinates -> struct of Arrays statt vector of structs
+
 #include <iostream>
 #include <vector>
 #include <set>
