@@ -42,4 +42,4 @@ jobs:
         # We can only test cuda files by compiling them with nvcc
         # As there are no GPUs on GitHub Actions Servers
         # Replace cpp file with cu file when ready, as we use the same test_main.cpp for both 
-        run: nvcc -std=c++17 test_main.cpp ../parallel_cpp/contour_to_signal.cu cleaning_and_boundary_extraction.cu -o cuda_test_runner
+        run: nvcc -std=c++17 test_main.cpp ../parallel_cpp/contour_to_signal.cu ../parallel_cpp/contour_to_signal.cu ../parallel_cpp/cleaning_and_boundary_extraction.cu cleaning_and_boundary_extraction.cpp -o cuda_test_runner
