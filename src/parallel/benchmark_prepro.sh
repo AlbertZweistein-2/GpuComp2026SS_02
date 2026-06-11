@@ -12,6 +12,18 @@ BLUE='\033[0;34m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+calc_diff() {
+    awk -v start="$1" -v end="$2" 'BEGIN { printf "%.3f", end - start }'
+}
+
+calc_sum() {
+    awk -v left="$1" -v right="$2" 'BEGIN { printf "%.3f", left + right }'
+}
+
+calc_ratio() {
+    awk -v numerator="$1" -v denominator="$2" 'BEGIN { if (denominator == 0) { printf "inf" } else { printf "%.2f", numerator / denominator } }'
+}
+
 # Verzeichnisse
 WORK_DIR="$(pwd)"
 DATA_DIR="../../data"
@@ -63,7 +75,7 @@ for idx in "${!IMAGES_TO_TEST[@]}"; do
     START=$(date +%s.%N)
     ./preprocessing_cpu "$IMAGE" > /dev/null 2>&1
     END=$(date +%s.%N)
-    CPU_TIME=$(echo "$END - $START" | bc)
+    CPU_TIME=$(calc_diff "$START" "$END")
     CPU_TIMES[$idx]="$CPU_TIME"
     echo -e "${GREEN}${CPU_TIME}s${NC}"
     
@@ -72,12 +84,12 @@ for idx in "${!IMAGES_TO_TEST[@]}"; do
     START=$(date +%s.%N)
     ./preprocessing_cuda "$IMAGE" > /dev/null 2>&1
     END=$(date +%s.%N)
-    GPU_TIME=$(echo "$END - $START" | bc)
+    GPU_TIME=$(calc_diff "$START" "$END")
     GPU_TIMES[$idx]="$GPU_TIME"
     echo -e "${GREEN}${GPU_TIME}s${NC}"
     
     # Speedup berechnen
-    SPEEDUP=$(echo "scale=2; ${CPU_TIMES[$idx]} / ${GPU_TIMES[$idx]}" | bc)
+    SPEEDUP=$(calc_ratio "${CPU_TIMES[$idx]}" "${GPU_TIMES[$idx]}")
     echo -e "  Speedup: ${YELLOW}${SPEEDUP}x${NC}"
     echo ""
 done
@@ -92,14 +104,14 @@ echo ""
 CPU_SUM=0
 GPU_SUM=0
 for i in "${!CPU_TIMES[@]}"; do
-    CPU_SUM=$(echo "$CPU_SUM + ${CPU_TIMES[$i]}" | bc)
-    GPU_SUM=$(echo "$GPU_SUM + ${GPU_TIMES[$i]}" | bc)
+    CPU_SUM=$(calc_sum "$CPU_SUM" "${CPU_TIMES[$i]}")
+    GPU_SUM=$(calc_sum "$GPU_SUM" "${GPU_TIMES[$i]}")
 done
 
 NUM_TESTS=${#CPU_TIMES[@]}
-CPU_AVG=$(echo "scale=3; $CPU_SUM / $NUM_TESTS" | bc)
-GPU_AVG=$(echo "scale=3; $GPU_SUM / $NUM_TESTS" | bc)
-AVG_SPEEDUP=$(echo "scale=2; $CPU_AVG / $GPU_AVG" | bc)
+CPU_AVG=$(calc_ratio "$CPU_SUM" "$NUM_TESTS")
+GPU_AVG=$(calc_ratio "$GPU_SUM" "$NUM_TESTS")
+AVG_SPEEDUP=$(calc_ratio "$CPU_AVG" "$GPU_AVG")
 
 echo -e "Anzahl Tests: ${YELLOW}${NUM_TESTS}${NC}"
 echo -e "Durchschnittliche CPU-Zeit: ${GREEN}${CPU_AVG}s${NC}"
@@ -113,7 +125,7 @@ printf "%-30s %12s %12s %12s\n" "Bild" "CPU (s)" "GPU (s)" "Speedup"
 printf "%-30s %12s %12s %12s\n" "$(printf '─%.0s' {1..30})" "$(printf '─%.0s' {1..12})" "$(printf '─%.0s' {1..12})" "$(printf '─%.0s' {1..12})"
 
 for i in "${!CPU_TIMES[@]}"; do
-    SPEEDUP=$(echo "scale=2; ${CPU_TIMES[$i]} / ${GPU_TIMES[$i]}" | bc)
+    SPEEDUP=$(calc_ratio "${CPU_TIMES[$i]}" "${GPU_TIMES[$i]}")
     printf "%-30s %12s %12s %12sx\n" "${IMAGE_NAMES[$i]}" "${CPU_TIMES[$i]}" "${GPU_TIMES[$i]}" "$SPEEDUP"
 done
 

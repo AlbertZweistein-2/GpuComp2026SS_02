@@ -44,6 +44,8 @@
 static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS  = 256;
 
+
+__constant__ float d_gaussian_kernel[MAX_KERNEL * MAX_KERNEL];
 // -----------------------------------------------------------------------------
 // CUDA helper
 // -----------------------------------------------------------------------------
@@ -103,8 +105,6 @@ __global__ void rgb_to_grayscale_kernel(
     int stride = blockDim.x * gridDim.x;
 
     for (int idx = pixel_idx; idx < num_pixels; idx += stride) {
-        int y = idx / width;
-        int x = idx % width;
         int rgb_idx = idx * 3;
 
         float r = static_cast<float>(rgb[rgb_idx]);
@@ -253,8 +253,7 @@ __global__ void gaussian_blur_kernel(
     float* out,
     int width,
     int height,
-    int ksize,
-    const float* d_gaussian_kernel)
+    int ksize)
 {
     int num_pixels = width * height;
     int pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -526,7 +525,6 @@ ImageU8 preprocess_CUDA(
     uint32_t* d_hist = nullptr;
     float* d_threshold = nullptr;
     float* d_minmax = nullptr;
-    float* d_gaussian_kernel = nullptr;
 
     CUDA_CHECK(cudaMalloc(&d_rgb, rgb_bytes));
     CUDA_CHECK(cudaMalloc(&d_gray, float_bytes));
@@ -535,25 +533,21 @@ ImageU8 preprocess_CUDA(
     CUDA_CHECK(cudaMalloc(&d_hist, HIST_BINS * sizeof(uint32_t)));
     CUDA_CHECK(cudaMalloc(&d_threshold, sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_minmax, 2 * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_gaussian_kernel, kernel.size() * sizeof(float)));
+    
+    
 
     CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgb_bytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(
+    CUDA_CHECK(cudaMemcpyToSymbol(
         d_gaussian_kernel,
         kernel.data(),
-        kernel.size() * sizeof(float),
-        cudaMemcpyHostToDevice));
-
-    dim3 block2d(16, 16);
-    dim3 grid2d(
-        (width  + block2d.x - 1) / block2d.x,
-        (height + block2d.y - 1) / block2d.y);
+        kernel.size() * sizeof(float)));
 
     int block1d = 256;
     int grid1d = (num_pixels + block1d - 1) / block1d;
+    //int grid1d = 1024;
 
     // 1 — RGB -> Grayscale
-    rgb_to_grayscale_kernel<<<grid2d, block2d>>>(
+    rgb_to_grayscale_kernel<<<grid1d, block1d>>>(
         d_rgb,
         d_gray,
         width,
@@ -585,14 +579,30 @@ ImageU8 preprocess_CUDA(
     CUDA_CHECK(cudaGetLastError());
 
     // 3 — Gaussian Blur
-    gaussian_blur_kernel<<<grid2d, block2d>>>(
+    cudaEvent_t start, stop;
+    CUDA_CHECK(cudaEventCreate(&start));
+    CUDA_CHECK(cudaEventCreate(&stop));
+
+    CUDA_CHECK(cudaEventRecord(start));
+
+    gaussian_blur_kernel<<<grid1d, block1d>>>(
         d_gray,
         d_blurred,
         width,
         height,
-        ksize,
-        d_gaussian_kernel);
+        ksize);
     CUDA_CHECK(cudaGetLastError());
+
+    CUDA_CHECK(cudaEventRecord(stop));
+    CUDA_CHECK(cudaEventSynchronize(stop));
+
+    float milliseconds = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
+
+    std::cout << "Gaussian Blur Time: " << milliseconds << " ms\n";
+
+    CUDA_CHECK(cudaEventDestroy(start));
+    CUDA_CHECK(cudaEventDestroy(stop));
 
     // 4a — Histogram
     CUDA_CHECK(cudaMemset(d_hist, 0, HIST_BINS * sizeof(uint32_t)));
@@ -632,7 +642,7 @@ ImageU8 preprocess_CUDA(
     CUDA_CHECK(cudaFree(d_hist));
     CUDA_CHECK(cudaFree(d_threshold));
     CUDA_CHECK(cudaFree(d_minmax));
-    CUDA_CHECK(cudaFree(d_gaussian_kernel));
+
 
     return result;
 }
@@ -676,9 +686,9 @@ int main(int argc, char** argv)
 
 
     //CPU preprocessing
-    auto res = preprocess_CPU(rgb, W, H, 5, 1.0f);
+    //auto res = preprocess_CPU(rgb, W, H, 5, 1.0f);
     // CUDA preprocessing
-    // auto res = preprocess_CUDA(rgb, W, H, 5, 1.0f);
+    auto res = preprocess_CUDA(rgb, W, H, 5, 1.0f);
 
     stbi_image_free(rgb);
 
