@@ -18,18 +18,6 @@
 //   PIPELINE_STEP_RADIAL_SIGNAL
 //   PIPELINE_STEP_PEAK_DETECTION
 //
-// Backend selection flags for executed stages:
-//   PIPELINE_USE_CUDA_PREPROCESSING
-//   PIPELINE_USE_CUDA_CLEANING
-//   PIPELINE_USE_CUDA_BOUNDARY_EXTRACTION
-//   PIPELINE_USE_CUDA_CONTOUR_EXTRACTION
-//   PIPELINE_USE_CUDA_CONTOUR_SMOOTHING
-//   PIPELINE_USE_CUDA_ENCLOSING_CIRCLE
-//   PIPELINE_USE_CUDA_RADIAL_SIGNAL
-//   PIPELINE_USE_CUDA_PEAK_DETECTION
-//
-// A CUDA stage must provide the matching *_cuda function declared in
-// include/cuda/ops_cuda.hpp and be linked into the final target.
 #if !defined(PIPELINE_STEP_PREPROCESSING) && \
     !defined(PIPELINE_STEP_CLEANING) && \
     !defined(PIPELINE_STEP_BOUNDARY_EXTRACTION) && \
@@ -52,7 +40,7 @@ namespace pipeline {
 
 struct StageTiming {
     double seconds = 0.0;
-    const char* backend = "disabled";
+    const char* source = "disabled";
 };
 
 struct PipelineTimings {
@@ -94,13 +82,13 @@ struct PipelineResult {
     ImageU8 cleaned;
     ImageU8 boundary;
 
-    std::vector<Coordinate> contour;
-    std::vector<Coordinate> smoothed_contour;
+    std::vector<Coordinate<int>> contour;
+    std::vector<Coordinate<int>> smoothed_contour;
 
-    CoordinateFloat circle_center{0.0f, 0.0f};
+    Coordinate<float> circle_center{0.0f, 0.0f};
     float circle_radius = 0.0f;
 
-    std::vector<float> radial_signal;
+    Signal radial_signal;
     std::vector<int> triangular_peak_indices;
 
     PipelineTimings timings;

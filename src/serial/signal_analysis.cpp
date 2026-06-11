@@ -1,16 +1,12 @@
-#include <iostream>
-#include <vector>
-#include <cmath>
-#include <utility>
+#include "serial/signal_analysis.hpp"
+#include "types.hpp"
 #include <algorithm>
-#include <cstdint>
-#include <set>
-#include <array>
+#include <cmath>
 
 
-std::vector<float> smooth_signal(const std::vector<float>& signal, int k) {
+Signal smooth_signal(const Signal& signal, int k) {
     int n = signal.size();
-    std::vector<float> smoothed(n);
+    Signal smoothed(n);
 
     for (int i = 0; i < n; ++i) {
         float sum = 0.0f;
@@ -24,9 +20,9 @@ std::vector<float> smooth_signal(const std::vector<float>& signal, int k) {
     return smoothed;
 }
 
-std::vector<float> compute_1d_sharpness(const std::vector<float>& radial_signal, int k) {
+Signal compute_1d_sharpness(const Signal& radial_signal, int k) {
     int n = static_cast<int>(radial_signal.size());
-    std::vector<float> sharpness(n, 0.0f);
+    Signal sharpness(n, 0.0f);
 
     for (int i = 0; i < n; ++i) {
         float curr = radial_signal[i];
@@ -41,13 +37,13 @@ std::vector<float> compute_1d_sharpness(const std::vector<float>& radial_signal,
 
 
 
-std::array<int, 4> find_triangular_peaks(
-    const std::vector<float>& curvature,
+Corners find_triangular_peaks(
+    const Signal& curvature,
     float min_prominence,
     int   min_distance) 
 {
     int n = static_cast<int>(curvature.size());
-    std::array<int, 4> final_corners = {0, 0, 0, 0};
+    Corners final_corners = {0, 0, 0, 0};
     if (n < 3) return final_corners;
 
     struct Cand { int idx; float val; float prom; };
@@ -107,9 +103,7 @@ std::array<int, 4> find_triangular_peaks(
 
 
 
-enum class EdgeType { Straight, Knob, Hole };
-
-inline char edge_char(EdgeType e) {
+char edge_char(EdgeType e) {
     switch (e) {
         case EdgeType::Straight: return 'L';
         case EdgeType::Knob:     return 'V';
@@ -119,17 +113,17 @@ inline char edge_char(EdgeType e) {
 }
 
 std::array<EdgeType,4> classify_edges(
-    const std::vector<float>& signal,
-    const std::array<int,4>& corner_idx,
-    float knob_factor = 1.08f,
-    float hole_factor = 0.92f)
+    const Signal& signal,
+    const Corners& corner_idx,
+    float knob_factor,
+    float hole_factor)
 {
     int n = (int)signal.size();
     std::array<EdgeType,4> labels{ EdgeType::Straight, EdgeType::Straight,
                                    EdgeType::Straight, EdgeType::Straight };
     if (n < 4) return labels;
 
-    std::vector<float> sorted_sig = signal;
+    Signal sorted_sig = signal;
     std::sort(sorted_sig.begin(), sorted_sig.end());
     float base = sorted_sig[n / 2];
     if (base <= 0.0f) return labels;
@@ -138,7 +132,7 @@ std::array<EdgeType,4> classify_edges(
         int start = corner_idx[e];
         int end   = corner_idx[(e + 1) % 4];
 
-        std::vector<float> seg;
+        Signal seg;
         for (int i = start; i != end; i = (i + 1) % n)
             seg.push_back(signal[i]);
         if (seg.size() < 4) { labels[e] = EdgeType::Straight; continue; }
@@ -164,5 +158,4 @@ std::string edges_to_string(const std::array<EdgeType,4>& labels) {
     for (auto e : labels) s += edge_char(e);
     return s;  
 }
-
 

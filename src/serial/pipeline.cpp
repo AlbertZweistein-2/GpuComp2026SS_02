@@ -1,4 +1,4 @@
-#include "pipeline/pipeline.hpp"
+#include "serial/pipeline.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,20 +16,10 @@
 #include "serial/cleaning.hpp"
 #include "serial/contour_to_signal.hpp"
 #include "serial/preprocessing.hpp"
+#include "serial/signal_analysis.hpp"
 #include "stb_image.h"
 #include "stb_image_write.h"
-#include "timer.hpp"
-
-#if defined(PIPELINE_USE_CUDA_PREPROCESSING) || \
-    defined(PIPELINE_USE_CUDA_CLEANING) || \
-    defined(PIPELINE_USE_CUDA_BOUNDARY_EXTRACTION) || \
-    defined(PIPELINE_USE_CUDA_CONTOUR_EXTRACTION) || \
-    defined(PIPELINE_USE_CUDA_CONTOUR_SMOOTHING) || \
-    defined(PIPELINE_USE_CUDA_ENCLOSING_CIRCLE) || \
-    defined(PIPELINE_USE_CUDA_RADIAL_SIGNAL) || \
-    defined(PIPELINE_USE_CUDA_PEAK_DETECTION)
-#include "cuda/ops_cuda.hpp"
-#endif
+#include "helpers.hpp"
 
 namespace fs = std::filesystem;
 
@@ -105,14 +95,14 @@ void write_u8_image(const fs::path& path, const ImageU8& image)
     }
 }
 
-std::vector<Coordinate> load_coordinates_csv(const fs::path& path)
+std::vector<Coordinate<int>> load_coordinates_csv(const fs::path& path)
 {
     std::ifstream file(path);
     if (!file.is_open()) {
         throw std::runtime_error("Could not open coordinate CSV: " + path.string());
     }
 
-    std::vector<Coordinate> coordinates;
+    std::vector<Coordinate<int>> coordinates;
     std::string line;
     while (std::getline(file, line)) {
         if (line.empty()) {
@@ -131,14 +121,14 @@ std::vector<Coordinate> load_coordinates_csv(const fs::path& path)
     return coordinates;
 }
 
-std::vector<float> load_signal_csv(const fs::path& path)
+Signal load_signal_csv(const fs::path& path)
 {
     std::ifstream file(path);
     if (!file.is_open()) {
         throw std::runtime_error("Could not open signal CSV: " + path.string());
     }
 
-    std::vector<float> signal;
+    Signal signal;
     std::string line;
     while (std::getline(file, line)) {
         if (!line.empty()) {
@@ -165,7 +155,7 @@ std::vector<int> load_indices_csv(const fs::path& path)
     return indices;
 }
 
-std::pair<CoordinateFloat, float> load_circle_txt(const fs::path& path)
+std::pair<Coordinate<float>, float> load_circle_txt(const fs::path& path)
 {
     std::ifstream file(path);
     if (!file.is_open()) {
@@ -188,7 +178,7 @@ std::pair<CoordinateFloat, float> load_circle_txt(const fs::path& path)
     return {{std::stof(a), std::stof(b)}, std::stof(radius_line)};
 }
 
-void write_coordinates_csv(const fs::path& path, const std::vector<Coordinate>& coordinates)
+void write_coordinates_csv(const fs::path& path, const std::vector<Coordinate<int>>& coordinates)
 {
     fs::create_directories(path.parent_path());
     std::ofstream file(path);
@@ -196,12 +186,12 @@ void write_coordinates_csv(const fs::path& path, const std::vector<Coordinate>& 
         throw std::runtime_error("Could not write coordinate CSV: " + path.string());
     }
 
-    for (const Coordinate& coordinate : coordinates) {
+    for (const Coordinate<int>& coordinate : coordinates) {
         file << coordinate.a << ',' << coordinate.b << '\n';
     }
 }
 
-void write_signal_csv(const fs::path& path, const std::vector<float>& signal)
+void write_signal_csv(const fs::path& path, const Signal& signal)
 {
     fs::create_directories(path.parent_path());
     std::ofstream file(path);
@@ -227,7 +217,7 @@ void write_indices_csv(const fs::path& path, const std::vector<int>& indices)
     }
 }
 
-void write_circle_txt(const fs::path& path, CoordinateFloat center, float radius)
+void write_circle_txt(const fs::path& path, Coordinate<float> center, float radius)
 {
     fs::create_directories(path.parent_path());
     std::ofstream file(path);
@@ -237,7 +227,7 @@ void write_circle_txt(const fs::path& path, CoordinateFloat center, float radius
     file << center.a << ',' << center.b << '\n' << radius << '\n';
 }
 
-std::vector<Coordinate> smooth_contour(const std::vector<Coordinate>& points, int window)
+std::vector<Coordinate<int>> smooth_contour(const std::vector<Coordinate<int>>& points, int window)
 {
     if (points.empty() || window <= 1) {
         return points;
@@ -245,7 +235,7 @@ std::vector<Coordinate> smooth_contour(const std::vector<Coordinate>& points, in
 
     const int n = static_cast<int>(points.size());
     const int pad = window / 2;
-    std::vector<Coordinate> smoothed;
+    std::vector<Coordinate<int>> smoothed;
     smoothed.reserve(points.size());
 
     for (int i = 0; i < n; ++i) {
@@ -391,136 +381,13 @@ fs::path contour_data(const fs::path& test_data_dir, const char* filename)
 }
 
 template <typename Fn>
-void time_stage(pipeline::StageTiming& timing, const char* backend, Fn&& fn)
+void time_stage(pipeline::StageTiming& timing, const char* source, Fn&& fn)
 {
     Timer timer;
     timer.reset();
     fn();
     timing.seconds = timer.get();
-    timing.backend = backend;
-}
-
-ImageU8 run_preprocessing_backend(const RgbImage& image, int kernel_size, float sigma, const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_PREPROCESSING
-    backend = "cuda";
-    return preprocess_cuda(image.data.data(), image.width, image.height, kernel_size, sigma);
-#else
-    backend = "serial";
-    return preprocess(image.data.data(), image.width, image.height, kernel_size, sigma);
-#endif
-}
-
-void run_cleaning_backend(
-    const ImageU8& image,
-    const ImageU8& kernel,
-    ImageU8& result,
-    int iterations,
-    const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_CLEANING
-    backend = "cuda";
-    morphological_open_cuda(image, kernel, result, iterations);
-#else
-    backend = "serial";
-    morphological_open(image, kernel, result, iterations);
-#endif
-}
-
-void run_boundary_backend(const ImageU8& input, ImageU8& boundary, const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_BOUNDARY_EXTRACTION
-    backend = "cuda";
-    get_external_boundary_mask_cuda(input, boundary);
-#else
-    backend = "serial";
-    get_external_boundary_mask(input, boundary);
-#endif
-}
-
-std::vector<Coordinate> run_contour_backend(const ImageU8& boundary_image, const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_CONTOUR_EXTRACTION
-    backend = "cuda";
-    return find_contour_chain_approx_simple_cuda(
-        boundary_image.data,
-        boundary_image.width,
-        boundary_image.height);
-#else
-    backend = "serial";
-    return find_contour_chain_approx_simple(
-        boundary_image.data,
-        boundary_image.width,
-        boundary_image.height);
-#endif
-}
-
-std::vector<Coordinate> run_smoothing_backend(
-    const std::vector<Coordinate>& contour,
-    int window,
-    const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_CONTOUR_SMOOTHING
-    backend = "cuda";
-    return smooth_contour_cuda(contour, window);
-#else
-    backend = "serial";
-    return smooth_contour(contour, window);
-#endif
-}
-
-std::pair<CoordinateFloat, float> run_circle_backend(
-    const std::vector<Coordinate>& contour,
-    const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_ENCLOSING_CIRCLE
-    backend = "cuda";
-    return enclosing_circle_approx_cuda(contour);
-#else
-    backend = "serial";
-    return enclosing_circle_approx(contour);
-#endif
-}
-
-std::vector<float> run_radial_signal_backend(
-    const std::vector<Coordinate>& contour,
-    CoordinateFloat center,
-    const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_RADIAL_SIGNAL
-    backend = "cuda";
-    return radial_signal_cuda(contour, center);
-#else
-    backend = "serial";
-    return radial_signal(contour, center);
-#endif
-}
-
-std::vector<int> run_peak_backend(
-    const std::vector<float>& signal,
-    int min_distance,
-    float min_prominence,
-    int smoothing_window,
-    float min_sharpness,
-    const char*& backend)
-{
-#ifdef PIPELINE_USE_CUDA_PEAK_DETECTION
-    backend = "cuda";
-    return find_triangular_peaks_cuda(
-        signal,
-        min_distance,
-        min_prominence,
-        smoothing_window,
-        min_sharpness);
-#else
-    backend = "serial";
-    return find_triangular_peaks(
-        signal,
-        min_distance,
-        min_prominence,
-        smoothing_window,
-        min_sharpness);
-#endif
+    timing.source = source;
 }
 
 } // namespace
@@ -540,15 +407,14 @@ PipelineResult run(const PipelineOptions& options)
 #ifdef PIPELINE_STEP_PREPROCESSING
     std::cout << "[pipeline] preprocessing: " << options.input_image_path << '\n';
     const RgbImage input_image = load_rgb_image(project_path(options.input_image_path));
-    const char* preprocessing_backend = "serial";
-    time_stage(result.timings.preprocessing, preprocessing_backend, [&]() {
-        result.binary = run_preprocessing_backend(
-            input_image,
+    time_stage(result.timings.preprocessing, "serial", [&]() {
+        result.binary = preprocess(
+            input_image.data.data(),
+            input_image.width,
+            input_image.height,
             options.gaussian_kernel_size,
-            options.gaussian_sigma,
-            preprocessing_backend);
+            options.gaussian_sigma);
     });
-    result.timings.preprocessing.backend = preprocessing_backend;
 #else
     std::cout << "[pipeline] preprocessing disabled, loading test binary\n";
     time_stage(result.timings.preprocessing, "test_data", [&]() {
@@ -559,11 +425,9 @@ PipelineResult run(const PipelineOptions& options)
 #ifdef PIPELINE_STEP_CLEANING
     std::cout << "[pipeline] cleaning\n";
     const ImageU8 kernel = make_kernel(options.morphology_kernel_width, options.morphology_kernel_height);
-    const char* cleaning_backend = "serial";
-    time_stage(result.timings.cleaning, cleaning_backend, [&]() {
-        run_cleaning_backend(result.binary, kernel, result.cleaned, options.morphology_iterations, cleaning_backend);
+    time_stage(result.timings.cleaning, "serial", [&]() {
+        morphological_open(result.binary, kernel, result.cleaned, options.morphology_iterations);
     });
-    result.timings.cleaning.backend = cleaning_backend;
 #else
     std::cout << "[pipeline] cleaning disabled, loading test cleaned image\n";
     time_stage(result.timings.cleaning, "test_data", [&]() {
@@ -573,11 +437,9 @@ PipelineResult run(const PipelineOptions& options)
 
 #ifdef PIPELINE_STEP_BOUNDARY_EXTRACTION
     std::cout << "[pipeline] boundary extraction\n";
-    const char* boundary_backend = "serial";
-    time_stage(result.timings.boundary_extraction, boundary_backend, [&]() {
-        run_boundary_backend(result.cleaned, result.boundary, boundary_backend);
+    time_stage(result.timings.boundary_extraction, "serial", [&]() {
+        get_external_boundary_mask(result.cleaned, result.boundary);
     });
-    result.timings.boundary_extraction.backend = boundary_backend;
 #else
     std::cout << "[pipeline] boundary extraction disabled, loading test boundary\n";
     time_stage(result.timings.boundary_extraction, "test_data", [&]() {
@@ -587,11 +449,12 @@ PipelineResult run(const PipelineOptions& options)
 
 #ifdef PIPELINE_STEP_CONTOUR_EXTRACTION
     std::cout << "[pipeline] contour extraction\n";
-    const char* contour_backend = "serial";
-    time_stage(result.timings.contour_extraction, contour_backend, [&]() {
-        result.contour = run_contour_backend(result.boundary, contour_backend);
+    time_stage(result.timings.contour_extraction, "serial", [&]() {
+        result.contour = find_contour_chain_approx_simple(
+            result.boundary.data,
+            result.boundary.width,
+            result.boundary.height);
     });
-    result.timings.contour_extraction.backend = contour_backend;
 #else
     std::cout << "[pipeline] contour extraction disabled, loading test contour\n";
     time_stage(result.timings.contour_extraction, "test_data", [&]() {
@@ -601,11 +464,9 @@ PipelineResult run(const PipelineOptions& options)
 
 #ifdef PIPELINE_STEP_CONTOUR_SMOOTHING
     std::cout << "[pipeline] contour smoothing\n";
-    const char* smoothing_backend = "serial";
-    time_stage(result.timings.contour_smoothing, smoothing_backend, [&]() {
-        result.smoothed_contour = run_smoothing_backend(result.contour, options.contour_smoothing_window, smoothing_backend);
+    time_stage(result.timings.contour_smoothing, "serial", [&]() {
+        result.smoothed_contour = smooth_contour(result.contour, options.contour_smoothing_window);
     });
-    result.timings.contour_smoothing.backend = smoothing_backend;
 #else
     std::cout << "[pipeline] contour smoothing disabled, loading test smoothed contour\n";
     time_stage(result.timings.contour_smoothing, "test_data", [&]() {
@@ -615,13 +476,11 @@ PipelineResult run(const PipelineOptions& options)
 
 #ifdef PIPELINE_STEP_ENCLOSING_CIRCLE
     std::cout << "[pipeline] enclosing circle\n";
-    const char* circle_backend = "serial";
-    time_stage(result.timings.enclosing_circle, circle_backend, [&]() {
-        auto [center, radius] = run_circle_backend(result.smoothed_contour, circle_backend);
+    time_stage(result.timings.enclosing_circle, "serial", [&]() {
+        auto [center, radius] = enclosing_circle_approx(result.smoothed_contour);
         result.circle_center = center;
         result.circle_radius = radius;
     });
-    result.timings.enclosing_circle.backend = circle_backend;
 #else
     std::cout << "[pipeline] enclosing circle disabled, loading test circle\n";
     time_stage(result.timings.enclosing_circle, "test_data", [&]() {
@@ -633,14 +492,11 @@ PipelineResult run(const PipelineOptions& options)
 
 #ifdef PIPELINE_STEP_RADIAL_SIGNAL
     std::cout << "[pipeline] radial signal\n";
-    const char* radial_backend = "serial";
-    time_stage(result.timings.radial_signal, radial_backend, [&]() {
-        result.radial_signal = run_radial_signal_backend(
+    time_stage(result.timings.radial_signal, "serial", [&]() {
+        result.radial_signal = radial_signal(
             result.smoothed_contour,
-            result.circle_center,
-            radial_backend);
+            result.circle_center);
     });
-    result.timings.radial_signal.backend = radial_backend;
 #else
     std::cout << "[pipeline] radial signal disabled, loading test signal\n";
     time_stage(result.timings.radial_signal, "test_data", [&]() {
@@ -650,17 +506,14 @@ PipelineResult run(const PipelineOptions& options)
 
 #ifdef PIPELINE_STEP_PEAK_DETECTION
     std::cout << "[pipeline] peak detection\n";
-    const char* peak_backend = "serial";
-    time_stage(result.timings.peak_detection, peak_backend, [&]() {
-        result.triangular_peak_indices = run_peak_backend(
+    time_stage(result.timings.peak_detection, "serial", [&]() {
+        result.triangular_peak_indices = find_triangular_peaks(
             result.radial_signal,
             options.peak_min_distance,
             options.peak_min_prominence,
             options.peak_smoothing_window,
-            options.peak_min_sharpness,
-            peak_backend);
+            options.peak_min_sharpness);
     });
-    result.timings.peak_detection.backend = peak_backend;
 #else
     std::cout << "[pipeline] peak detection disabled, loading test peak indices\n";
     time_stage(result.timings.peak_detection, "test_data", [&]() {
@@ -689,7 +542,7 @@ void print_summary(const PipelineResult& result)
         return std::count(image.data.begin(), image.data.end(), static_cast<uint8_t>(255));
     };
     const auto print_timing = [](const char* label, const StageTiming& timing) {
-        std::cout << "  " << label << " [" << timing.backend << "]"
+        std::cout << "  " << label << " [" << timing.source << "]"
                   << " : " << timing.seconds * 1000.0 << " ms\n";
     };
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -28,10 +29,11 @@ struct Region {
 };
 
 // Custom coordinate struct
+template <typename T>
 struct Coordinate {
     // Using a and b instead of x and y, since the orginal python code switches from (x, y) to (y, x) once
-    int a;
-    int b;
+    T a;
+    T b;
 
     // some custom operators
     // needed for the std::set to store unique coordinates during Moore neighbor tracing
@@ -50,7 +52,10 @@ struct Coordinate {
 // Again, a custom coordinate struct
 // but this time with floats
 // only needed for the center point of the encloding circle
-struct CoordinateFloat {
-    float a;
-    float b;
-};
+// struct CoordinateFloat {
+//     float a;
+//     float b;
+// };
+
+using Signal = std::vector<float>;
+using Corners = std::array<int, 4>;
