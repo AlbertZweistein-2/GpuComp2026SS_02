@@ -367,7 +367,7 @@ __global__ void morphology_kernel(
 // Main pipeline — combines all steps
 // -----------------------------------------------------------------------------
 
-ImageU8 preprocess_CUDA(
+ImageU8 preprocess_cuda(
         const uint8_t* rgb,
         int width,
         int height,
