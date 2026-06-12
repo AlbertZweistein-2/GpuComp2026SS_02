@@ -45,7 +45,7 @@ static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS  = 256;
 
 
-__constant__ float d_gaussian_kernel[MAX_KERNEL * MAX_KERNEL];
+
 // -----------------------------------------------------------------------------
 // CUDA helper
 // -----------------------------------------------------------------------------
@@ -61,31 +61,10 @@ __constant__ float d_gaussian_kernel[MAX_KERNEL * MAX_KERNEL];
 
 //FOR CUDA KERNELS 
 //Gaussian kernel will be allocated in global memory
+//CHANGE: was returned to const due to performance reasons
 
+__constant__ float d_gaussian_kernel[MAX_KERNEL * MAX_KERNEL];
 
-
-// -----------------------------------------------------------------------------
-// STEP 1 — RGB -> Grayscale
-//
-// Formula: Y = 0.299·R + 0.587·G + 0.114·B  (ITU-R BT.601)
-// -----------------------------------------------------------------------------
-static void rgb_to_grayscale(
-    const uint8_t* rgb,
-    int width, int height,
-    std::vector<float>& gray)
-{
-    gray.resize(static_cast<size_t>(width) * height);
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            int idx = (y * width + x) * 3;
-            float r = rgb[idx];
-            float g = rgb[idx + 1];
-            float b = rgb[idx + 2];
-            gray[y * width + x] = 0.299f * r + 0.587f * g + 0.114f * b;
-        }
-    }
-}
 
 //FOR CUDA Impl. 
 // -----------------------------------------------------------------------------
@@ -117,23 +96,6 @@ __global__ void rgb_to_grayscale_kernel(
 
 
 
-
-// -----------------------------------------------------------------------------
-// STEP 2 — Normalization
-//
-// Scales all pixel values linearly to [0, 255].
-// -----------------------------------------------------------------------------
-static void normalize(std::vector<float>& gray)
-{
-    float gmin = *std::min_element(gray.begin(), gray.end());
-    float gmax = *std::max_element(gray.begin(), gray.end());
-
-    float range = gmax - gmin;
-    if (range < 1e-5f) range = 1.0f;   // avoid division by zero
-
-    for (float& v : gray)
-        v = (v - gmin) / range * 255.0f;
-}
 
 //FOR CUDA Impl. 
 // -----------------------------------------------------------------------------
@@ -206,47 +168,12 @@ static std::vector<float> make_gaussian_kernel(int ksize, float sigma)
     return kernel;
 }
 
-// -----------------------------------------------------------------------------
-// STEP 3b — Gaussian Blur (2-D convolution)
-//
-// -----------------------------------------------------------------------------
-static void gaussian_blur(
-    const std::vector<float>& in,
-    int width, int height,
-    int ksize, const std::vector<float>& kernel,
-    std::vector<float>& out)
-{
-    out.resize(static_cast<size_t>(width) * height);
-
-    int half = ksize / 2;
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            float sum = 0.f;
-
-            for (int ky = 0; ky < ksize; ++ky) {
-                for (int kx = 0; kx < ksize; ++kx) {
-                    // Clamp border handling (same as CUDA kernel)
-                    int sy = clamp(y - half + ky, 0, height - 1);
-                    int sx = clamp(x - half + kx, 0,  width - 1);
-                    sum += in[sy * width + sx] * kernel[ky * ksize + kx];
-                }
-            }
-
-            out[y * width + x] = sum;
-        }
-    }
-}
 
 //FOR CUDA Impl. 
 // -----------------------------------------------------------------------------
 // STEP 3b — Gaussian Blur (2-D convolution)
 //
 // -----------------------------------------------------------------------------
-__device__ inline int clamp_device(int v, int lo, int hi)
-{
-    return max(lo, min(v, hi));
-}
 
 __global__ void gaussian_blur_kernel(
     const float* in,
@@ -264,12 +191,16 @@ __global__ void gaussian_blur_kernel(
     for (int idx = pixel_idx; idx < num_pixels; idx += stride) {
         int y = idx / width;
         int x = idx % width;
+
         float sum = 0.0f;
 
         for (int ky = 0; ky < ksize; ++ky) {
             for (int kx = 0; kx < ksize; ++kx) {
-                int sy = clamp_device(y - half + ky, 0, height - 1);
-                int sx = clamp_device(x - half + kx, 0, width - 1);
+                int sy = y - half + ky;
+                int sx = x - half + kx;
+
+                sy = max(0, min(sy, height - 1));
+                sx = max(0, min(sx, width - 1));
 
                 float pixel  = in[sy * width + sx];
                 float weight = d_gaussian_kernel[ky * ksize + kx];
@@ -282,20 +213,6 @@ __global__ void gaussian_blur_kernel(
     }
 }
 
-// -----------------------------------------------------------------------------
-// STEP 4a — Compute histogram
-// -----------------------------------------------------------------------------
-static void compute_histogram(
-    const std::vector<float>& gray,
-    std::vector<uint32_t>& hist)
-{
-    hist.assign(HIST_BINS, 0);
-
-    for (float v : gray) {
-        int bin = static_cast<int>(std::min(v, 255.f));
-        ++hist[bin];
-    }
-}
 
 // -----------------------------------------------------------------------------
 //FOR CUDA Impl.
@@ -332,44 +249,6 @@ __global__ void histogram_kernel(
 
 
 
-// -----------------------------------------------------------------------------
-// STEP 4b — Otsu threshold
-//
-// Maximize inter-class variance between foreground and background.
-// Same logic as `otsu_from_histogram()` in the CUDA implementation
-// and the Python reference (`otsu_threshold`).
-// -----------------------------------------------------------------------------
-static float otsu_threshold(
-        const std::vector<uint32_t>& hist,
-        int total_pixels)
-{
-    double sum_total = 0.0;
-    for (int t = 0; t < HIST_BINS; ++t)
-        sum_total += t * hist[t];
-
-    double sum_bg = 0.0, w_bg = 0.0;
-    double max_var = 0.0;
-    int threshold = 0;
-
-    for (int t = 0; t < HIST_BINS; ++t) {
-        w_bg += hist[t];
-        if (w_bg == 0.0) continue;
-
-        double w_fg = total_pixels - w_bg;
-        if (w_fg == 0.0) break;
-
-        sum_bg += t * hist[t];
-        double mean_bg = sum_bg / w_bg;
-        double mean_fg = (sum_total - sum_bg) / w_fg;
-
-        double var = w_bg * w_fg * (mean_bg - mean_fg) * (mean_bg - mean_fg);
-        if (var > max_var) {
-            max_var = var;
-            threshold = t;
-        }
-    }
-    return static_cast<float>(threshold);
-}
 
 // -----------------------------------------------------------------------------
 //FOR CUDA Impl. 
@@ -417,20 +296,6 @@ __global__ void otsu_threshold_kernel(
     *threshold_out = static_cast<float>(threshold);
 }
 
-// -----------------------------------------------------------------------------
-// STEP 5 - Binarization
-// -----------------------------------------------------------------------------
-static void binarize(
-    const std::vector<float>& gray,
-    float threshold,
-    std::vector<uint8_t>& binary)
-{
-    binary.resize(gray.size());
-
-    for (size_t i = 0; i < gray.size(); ++i)
-        binary[i] = (gray[i] > threshold) ? 255u : 0u;
-
-}
 
 // -----------------------------------------------------------------------------
 // FOR CUDA Impl.
@@ -454,44 +319,6 @@ __global__ void binarize_kernel(
 // -----------------------------------------------------------------------------
 // Main pipeline — combines all steps
 // -----------------------------------------------------------------------------
-
-ImageU8 preprocess_CPU(
-        const uint8_t* rgb,
-        int width, 
-        int height,
-        int ksize,
-        float sigma)
-{
-    ImageU8 result;
-    result.width = width;
-    result.height = height;
-
-    // 1 — RGB -> Grayscale
-    std::vector<float> gray;
-    rgb_to_grayscale(rgb, width, height, gray);
-
-    // 2 — Normalization
-    normalize(gray);
-
-    // 3 — Gaussian Blur
-    std::vector<float> kernel = make_gaussian_kernel(ksize, sigma);
-    std::vector<float> blurred;
-    gaussian_blur(gray, width, height, ksize, kernel, blurred);
-
-    // 4a — Histogram
-    std::vector<uint32_t> hist;
-    compute_histogram(blurred, hist);
-
-    // 4b — Otsu
-    auto threshold = otsu_threshold(hist, width * height);
-
-    // 5 — Binarization
-    binarize(blurred, threshold, result.data);
-
-    return result;
-}
-
-
 
 ImageU8 preprocess_CUDA(
         const uint8_t* rgb,
@@ -685,10 +512,9 @@ int main(int argc, char** argv)
 
 
 
-    //CPU preprocessing
-    //auto res = preprocess_CPU(rgb, W, H, 5, 1.0f);
+    
     // CUDA preprocessing
-    auto res = preprocess_CUDA(rgb, W, H, 5, 1.0f);
+    auto res = preprocess_CUDA(rgb, W, H, 15, 1.0f);
 
     stbi_image_free(rgb);
 
