@@ -317,6 +317,53 @@ __global__ void binarize_kernel(
 
 
 // -----------------------------------------------------------------------------
+// FOR CUDA Impl.
+// STEP 6 — Morphological Filter
+// -----------------------------------------------------------------------------
+__global__ void morphology_kernel(
+    const uint8_t* in,
+    uint8_t* out,
+    int width,
+    int height,
+    int radius,
+    bool dilate)
+{
+    int num_pixels = width * height;
+    int pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+
+    for (int idx = pixel_idx; idx < num_pixels; idx += stride) {
+        int y = idx / width;
+        int x = idx % width;
+
+        uint8_t result = dilate ? 0u : 255u;
+
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                int sy = y + dy;
+                int sx = x + dx;
+
+                sy = max(0, min(sy, height - 1));
+                sx = max(0, min(sx, width - 1));
+
+                uint8_t value = in[sy * width + sx];
+
+                if (dilate) {
+                    if (value > result)
+                        result = value;
+                } else {
+                    if (value < result)
+                        result = value;
+                }
+            }
+        }
+
+        out[idx] = result;
+    }
+}
+
+
+// -----------------------------------------------------------------------------
 // Main pipeline — combines all steps
 // -----------------------------------------------------------------------------
 
@@ -352,6 +399,7 @@ ImageU8 preprocess_CUDA(
     uint32_t* d_hist = nullptr;
     float* d_threshold = nullptr;
     float* d_minmax = nullptr;
+    uint8_t* d_morph = nullptr;
 
     CUDA_CHECK(cudaMalloc(&d_rgb, rgb_bytes));
     CUDA_CHECK(cudaMalloc(&d_gray, float_bytes));
@@ -360,7 +408,7 @@ ImageU8 preprocess_CUDA(
     CUDA_CHECK(cudaMalloc(&d_hist, HIST_BINS * sizeof(uint32_t)));
     CUDA_CHECK(cudaMalloc(&d_threshold, sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_minmax, 2 * sizeof(float)));
-    
+    CUDA_CHECK(cudaMalloc(&d_morph, binary_bytes));
     
 
     CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgb_bytes, cudaMemcpyHostToDevice));
@@ -456,6 +504,29 @@ ImageU8 preprocess_CUDA(
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
+    // 6 — Morphological Opening
+    // Erosion followed by dilation
+    int morph_radius = 2;   // 1 means 3x3 Filter 2 means 5x5 Filter etc.
+
+    morphology_kernel<<<grid1d, block1d>>>(
+        d_binary,
+        d_morph,
+        width,
+        height,
+        morph_radius,
+        false);             // false = erosion    true = dilation
+    CUDA_CHECK(cudaGetLastError());
+
+    morphology_kernel<<<grid1d, block1d>>>(
+        d_morph,
+        d_binary,
+        width,
+        height,
+        morph_radius,
+        true);              // true = dilation
+    CUDA_CHECK(cudaGetLastError());
+
+
     CUDA_CHECK(cudaMemcpy(
         result.data.data(),
         d_binary,
@@ -469,6 +540,7 @@ ImageU8 preprocess_CUDA(
     CUDA_CHECK(cudaFree(d_hist));
     CUDA_CHECK(cudaFree(d_threshold));
     CUDA_CHECK(cudaFree(d_minmax));
+    CUDA_CHECK(cudaFree(d_morph));
 
 
     return result;
