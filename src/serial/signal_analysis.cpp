@@ -2,17 +2,21 @@
 #include "types.hpp"
 #include <algorithm>
 #include <cmath>
+#include <vector>
+#include <string>
 
-
+// --- Stage 1: Centered Moving Average
 Signal smooth_signal(const Signal& signal, int k) {
     int n = signal.size();
     Signal smoothed(n);
+    int pad = k / 2;
 
     for (int i = 0; i < n; ++i) {
         float sum = 0.0f;
-        for (int j = 0; j < k; ++j) {
-            
-            sum += signal[(i + j) % n];
+        for (int j = -pad; j <= pad; ++j) {
+            // Safely wrap negative indices
+            int idx = ((i + j) % n + n) % n; 
+            sum += signal[idx];
         }
         smoothed[i] = sum / k;
     }
@@ -20,89 +24,127 @@ Signal smooth_signal(const Signal& signal, int k) {
     return smoothed;
 }
 
-Signal compute_1d_sharpness(const Signal& radial_signal, int k) {
-    int n = static_cast<int>(radial_signal.size());
-    Signal sharpness(n, 0.0f);
-
-    for (int i = 0; i < n; ++i) {
-        float curr = radial_signal[i];
-        float prev = radial_signal[(i - k + n) % n];
-        float next = radial_signal[(i + k) % n];
-
-        sharpness[i] = (curr - prev) + (curr - next);
-    }
-    
-    return sharpness;
-}
-
-
-
+// --- Stage 2: Peak Detection & Filtering
 Corners find_triangular_peaks(
-    const Signal& curvature,
+    const Signal& smooth,
     float min_prominence,
+    float min_sharpness,
     int   min_distance) 
 {
-    int n = static_cast<int>(curvature.size());
+    int n = static_cast<int>(smooth.size());
     Corners final_corners = {0, 0, 0, 0};
     if (n < 3) return final_corners;
 
-    struct Cand { int idx; float val; float prom; };
-    std::vector<Cand> cands;
+    auto wrap = [n](int i) { return ((i % n) + n) % n; };
 
-    for (int i = 0; i < n; ++i) {
-        float prev = curvature[(i - 1 + n) % n];
-        float curr = curvature[i];
-        float next = curvature[(i + 1) % n];
-
-        if (curr > prev && curr > next) {
-            float left_min  = curr;
-            float right_min = curr;
-
-            for (int s = 1; s < n; ++s) {
-                float v = curvature[(i - s + n) % n];
-                if (v > curr) break;
-                left_min = std::min(left_min, v);
-            }
-            for (int s = 1; s < n; ++s) {
-                float v = curvature[(i + s) % n];
-                if (v > curr) break;
-                right_min = std::min(right_min, v);
-            }
-
-            float prominence = curr - std::max(left_min, right_min);
-            if (prominence >= min_prominence) {
-                cands.push_back({i, curr, prominence});
-            }
+    // 1. Find local maxima (candidates)
+    std::vector<int> candidates;
+    for(int i = 0; i < n; ++i) {
+        int l = (i == 0)     ? n - 1 : i - 1;
+        int r = (i == n - 1) ? 0     : i + 1;
+        if (smooth[i] >= smooth[l] && smooth[i] > smooth[r]) {
+            candidates.push_back(i);
         }
     }
-    std::sort(cands.begin(), cands.end(),
-              [](const Cand& a, const Cand& b) { return a.prom > b.prom; });
 
+    // 2. Filter candidates by prominence, sharpness, and distance
+    struct Cand { int idx; float val; };
     std::vector<Cand> kept;
-    for (const auto& c : cands) {
-        bool ok = true;
-        for (const auto& k : kept) {
-            int d = std::abs(c.idx - k.idx);
-            d = std::min(d, n - d);          // circular distance
-            if (d < min_distance) { ok = false; break; }
+
+    for (int idx : candidates) {
+        float val = smooth[idx];
+
+        // Circular prominence
+        float lmin = val, rmin = val;
+        for (int step = 1; step < n; ++step) {
+            int j = wrap(idx - step);
+            if (smooth[j] > val) break;
+            lmin = std::min(lmin, smooth[j]);
         }
-        if (ok) kept.push_back(c);
+        for (int step = 1; step < n; ++step) {
+            int j = wrap(idx + step);
+            if (smooth[j] > val) break;
+            rmin = std::min(rmin, smooth[j]);
+        }
+        float prom = val - std::max(lmin, rmin);
+
+        if (prom < min_prominence) continue;
+
+        // Circular sharpness (using 20-step window)
+        int li = wrap(idx - 20);
+        int ri = wrap(idx + 20);
+        float sharp = val - 0.5f * (smooth[li] + smooth[ri]);
+
+        if (sharp < min_sharpness) continue;
+
+        // Circular minimum distance
+        if (!kept.empty()) {
+            int linear_dist = std::abs(idx - kept.back().idx);
+            int circ_dist = std::min(linear_dist, n - linear_dist);
+            
+            if (circ_dist < min_distance) {
+                if (val > kept.back().val) {
+                    kept.back() = {idx, val};
+                }
+                continue;
+            }
+        }
+        kept.push_back({idx, val});
     }
-    int num_found = std::min(4, static_cast<int>(kept.size()));
-    kept.resize(num_found); 
 
-    std::sort(kept.begin(), kept.end(),
-              [](const Cand& a, const Cand& b) { return a.idx < b.idx; });
+    // End of loop wrap distance check (last to first)
+    if (kept.size() > 1) {
+        int linear_dist = std::abs(kept.front().idx - kept.back().idx);
+        int circ_dist = std::min(linear_dist, n - linear_dist);
+        if (circ_dist < min_distance) {
+            if (kept.back().val > kept.front().val) {
+                kept.front() = kept.back();
+            }
+            kept.pop_back();
+        }
+    }
 
-    for (int i = 0; i < num_found; ++i) {
-        final_corners[i] = kept[i].idx;
+    // 3. Greedy max-min distance corner selection (Guarantees exactly 4 corners)
+    std::vector<Cand> remaining = kept;
+    std::sort(remaining.begin(), remaining.end(), 
+              [](const Cand& a, const Cand& b){ return a.val > b.val; });
+
+    std::vector<int> corners;
+    if (!remaining.empty()) corners.push_back(remaining[0].idx); 
+
+    while (corners.size() < 4 && !remaining.empty()) {
+        int best_idx = -1;
+        int best_dist = -1;
+        
+        for (const auto& pk : remaining) {
+            int min_d = n;
+            for (int c : corners) {
+                int d = std::abs(pk.idx - c);
+                min_d = std::min(min_d, std::min(d, n - d));
+            }
+            if (min_d > best_dist) {
+                best_dist = min_d;
+                best_idx  = pk.idx;
+            }
+        }
+        
+        if (best_idx != -1) {
+            corners.push_back(best_idx);
+            remaining.erase(std::remove_if(remaining.begin(), remaining.end(),
+                [best_idx](const Cand& pk){ return pk.idx == best_idx; }),
+                remaining.end());
+        }
+    }
+
+    std::sort(corners.begin(), corners.end());
+    for (int i = 0; i < std::min(4, (int)corners.size()); ++i) {
+        final_corners[i] = corners[i];
     }
     
     return final_corners;
 }
 
-
-
+// --- Stage 3: Edge Classification
 char edge_char(EdgeType e) {
     switch (e) {
         case EdgeType::Straight: return 'L';
@@ -113,43 +155,54 @@ char edge_char(EdgeType e) {
 }
 
 std::array<EdgeType,4> classify_edges(
-    const Signal& signal,
-    const Corners& corner_idx,
-    float knob_factor,
-    float hole_factor)
+    const Signal& raw,
+    const Corners& corners,
+    float tol_factor)
 {
-    int n = (int)signal.size();
+    int n = (int)raw.size();
     std::array<EdgeType,4> labels{ EdgeType::Straight, EdgeType::Straight,
                                    EdgeType::Straight, EdgeType::Straight };
     if (n < 4) return labels;
 
-    Signal sorted_sig = signal;
-    std::sort(sorted_sig.begin(), sorted_sig.end());
-    float base = sorted_sig[n / 2];
-    if (base <= 0.0f) return labels;
-
     for (int e = 0; e < 4; ++e) {
-        int start = corner_idx[e];
-        int end   = corner_idx[(e + 1) % 4];
+        int ca = corners[e];
+        int cb = corners[(e + 1) % 4];
 
-        Signal seg;
-        for (int i = start; i != end; i = (i + 1) % n)
-            seg.push_back(signal[i]);
-        if (seg.size() < 4) { labels[e] = EdgeType::Straight; continue; }
+        int edge_len = (cb - ca + n) % n;
+        int margin = edge_len / 5; 
+        
+        // 1. Find the "shoulders"
+        int start_idx = (ca + margin) % n;
+        int end_idx = (cb - margin + n) % n;
+        float v_start = raw[start_idx];
+        float v_end = raw[end_idx];
+        
+        float shoulder_max = std::max(v_start, v_end);
+        float shoulder_min = std::min(v_start, v_end);
 
-        int mlo = (int)(seg.size() * 0.25f);
-        int mhi = (int)(seg.size() * 0.75f);
-        if (mhi <= mlo) mhi = mlo + 1;
+        // 2. Find the absolute max and min in the cropped region
+        float mx = -1e30f, mn = 1e30f;
+        for (int step = margin; step <= edge_len - margin; ++step) {
+            int i = (ca + step) % n;
+            float val = raw[i];
+            mx = std::max(mx, val);
+            mn = std::min(mn, val);
+        }
 
-        float sum = 0.0f;
-        for (int i = mlo; i < mhi; ++i) sum += seg[i];
-        float mid = sum / (mhi - mlo);
+        // 3. Dynamic tolerance based on the scale of this specific edge
+        float local_tol = tol_factor * shoulder_max; 
 
-        float ratio = mid / base;
-        if      (ratio > knob_factor) labels[e] = EdgeType::Knob;   // V
-        else if (ratio < hole_factor) labels[e] = EdgeType::Hole;   // C
-        else                          labels[e] = EdgeType::Straight; // L
+        if (mx > shoulder_max + local_tol) {
+            labels[e] = EdgeType::Knob;     // V
+        } 
+        else if (mn < shoulder_min - local_tol) {
+            labels[e] = EdgeType::Hole;     // C
+        } 
+        else {
+            labels[e] = EdgeType::Straight; // L
+        }
     }
+    
     return labels;
 } 
 
@@ -158,4 +211,3 @@ std::string edges_to_string(const std::array<EdgeType,4>& labels) {
     for (auto e : labels) s += edge_char(e);
     return s;  
 }
-
