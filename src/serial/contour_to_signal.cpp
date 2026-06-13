@@ -9,8 +9,7 @@
 #include "types.hpp"
 #include "serial/contour_to_signal.hpp"
 
-// Now the actual functions
-// ______________________________________________________________________________________________
+______________________________________________________________________________________________
 
 // Moore neighbor tracing algorithm to get the vector of contour coordinates
 // Inherently sequential
@@ -180,32 +179,41 @@ CoordinateVector<int> find_contour_chain_approx_simple(const std::vector<uint8_t
 
 // ______________________________________________________________________________________________
 
-// Smooth Contour
-
+// moving average smoothing of the contour points vector
 CoordinateVector<int> smooth_contour(const CoordinateVector<int>& points, int window) {
-    if (points.empty() || window <= 1) {
-        return points;
-    }
+    // in case the contour is empty
+    // or the window size is too small or too large
+    if (points.empty() || window <= 1 || window >= n) {
+    return points;
+}
 
+    // casting size_t to int
     const int n = static_cast<int>(points.size());
-    const int pad = window / 2;
-    CoordinateVector<int> smoothed;
-    smoothed.reserve(points.size());
+    // the smoothed contour vector will be the same size as the original 
+    CoordinateVector<int> smoothed(n);
+    int half_window = window / 2;
 
+    // iterating over all elements in the contour vector
     for (int i = 0; i < n; ++i) {
+        // keeping separate sums for the x and y coordinates
         float sum_a = 0.0f;
         float sum_b = 0.0f;
-        for (int offset = -pad; offset <= pad; ++offset) {
-            int idx = (i + offset + n) % n;
-            sum_a += static_cast<float>(points[static_cast<size_t>(idx)].a);
-            sum_b += static_cast<float>(points[static_cast<size_t>(idx)].b);
+        // iterating over the window within the vector
+        // window_j is the index within the window
+        // the center of the window is at offset 0
+        for (int window_j = - half_window; window_j <= half_window; ++window_j) {
+            // window_i is the index within the vector mapped back to the whole vector
+            size_t window_i = (i + window_j + n) % n;
+            sum_a += static_cast<float>(points[window_i].a);
+            sum_b += static_cast<float>(points[window_i].b);
         }
 
-        const float divisor = static_cast<float>(2 * pad + 1);
-        smoothed.push_back({
+        // calculating the average
+        const float divisor = static_cast<float>(2 * half_window + 1);
+        smoothed[i] = Coordinate<int>{
             static_cast<int>(std::lround(sum_a / divisor)),
             static_cast<int>(std::lround(sum_b / divisor))
-        });
+        };
     }
     return smoothed;
 }
