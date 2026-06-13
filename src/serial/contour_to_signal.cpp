@@ -9,7 +9,6 @@
 #include "types.hpp"
 #include "serial/contour_to_signal.hpp"
 
-______________________________________________________________________________________________
 
 // Moore neighbor tracing algorithm to get the vector of contour coordinates
 // Inherently sequential

@@ -17,54 +17,18 @@
 #include <thrust/transform.h>
 #include <thrust/copy.h>
 
-// Some custom structs
-// ______________________________________________________________________________________________
-
-// Custom coordinate struct
-struct Coordinate
-{
-    // Using a and b instead of x and y, since the orginal python code switches from (x, y) to (y, x) once
-    int a;
-    int b;
-
-    // some custom operators
-    // needed for the std::set to store unique coordinates during Moore neighbor tracing
-    __host__ __device__ bool operator<(const Coordinate &c2) const
-    {
-        if (b != c2.b)
-            return b < c2.b;
-        return a < c2.a;
-    }
-
-    // needed for the convergence criterion in the Moore neighbor tracing
-    // converges when the current point equals the starting point
-    __host__ __device__ bool operator==(const Coordinate &c2) const
-    {
-        return a == c2.a && b == c2.b;
-    }
-};
-
-// Again, a custom coordinate struct
-// but this time with floats
-// only needed for the center point of the encloding circle
-struct CoordinateFloat
-{
-    float a;
-    float b;
-};
-
-// Now the actual functions
-// ______________________________________________________________________________________________
+#include "types.hpp"
+#include "parallel/contour_to_signal.cuh"
 
 // Moore neighbor tracing algorithm to get the vector of contour coordinates
 // Inherently sequential, therefore not parallelizeable
 // Gemini recommends not to parallelize the contour tracing, very complex for little speedup
-std::vector<Coordinate> trace_contour(const std::vector<uint8_t> &boundary, int width, int height)
+CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int width, int height)
 {
 
     // Goes from top-left to bottom-right to find the first nonzero pixel
     // this then becomes the starting point
-    Coordinate start{-1, -1};
+    Coordinate<int> start{-1, -1};
     for (int i = 0; i < height; ++i)
     {
         for (int j = 0; j < width; ++j)
@@ -84,18 +48,18 @@ std::vector<Coordinate> trace_contour(const std::vector<uint8_t> &boundary, int 
     if (start.a == -1)
     {
         std::cerr << "No contour points found in the boundary image." << std::endl;
-        return std::vector<Coordinate>();
+        return CoordinateVector<int>();
     }
 
     // the actual contour vector
-    std::vector<Coordinate> contour;
+    CoordinateVector<int> contour;
     // adding the start pixel
     contour.push_back(start);
 
-    Coordinate current = start;
+    Coordinate<int> current = start;
     int prev_dir = 0;
     // and keeping a set of unique coordinates that have been visited
-    std::set<Coordinate> visited;
+    std::set<Coordinate<int>> visited;
     visited.insert(start);
 
     // an array of the indices corresponding to the eight neighboring pixels
@@ -120,7 +84,7 @@ std::vector<Coordinate> trace_contour(const std::vector<uint8_t> &boundary, int 
             if (0 <= ny && ny < height && 0 <= nx && nx < width && boundary[ny * width + nx] > 0)
             {
 
-                Coordinate next_point = Coordinate{ny, nx};
+                Coordinate<int> next_point = Coordinate<int>{ny, nx};
                 // if this is the starting point again
                 // and we have found more than ten points
                 // we converge
@@ -160,14 +124,14 @@ std::vector<Coordinate> trace_contour(const std::vector<uint8_t> &boundary, int 
 // Removes unnecessary points along straight lines, we only need the corners
 // Also inherently sequential, therefore not parallelizeable
 // Gemini also recommends not to parallelize the contour simplification, very complex for little speedup
-std::vector<Coordinate> simplify_chain_approx(const std::vector<Coordinate> &contour)
+CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour)
 {
     if (contour.size() < 3)
     {
         return contour;
     }
 
-    std::vector<Coordinate> simplified;
+    CoordinateVector<int> simplified;
     simplified.push_back(contour.front());
 
     // we iterate through the contour points, starting from the second point
@@ -206,9 +170,9 @@ std::vector<Coordinate> simplify_chain_approx(const std::vector<Coordinate> &con
 
 struct swap_and_b
 {
-    __host__ __device__ Coordinate operator()(const Coordinate &c) const
+    __host__ __device__ Coordinate<int> operator()(const Coordinate<int> &c) const
     {
-        return Coordinate{c.b, c.a};
+        return Coordinate<int>{c.b, c.a};
     }
 };
 
@@ -217,10 +181,10 @@ struct swap_and_b
 // Just a function to first call the two previous functions
 // for contour tracing and simplification
 // and then swaps the coordinates from (y, x) back to (x, y) just like in the original python code
-std::vector<Coordinate> find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height)
+CoordinateVector<int> find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height)
 {
     // just calling the two previous functions
-    std::vector<Coordinate> contour = trace_contour(boundary, width, height);
+    CoordinateVector<int> contour = trace_contour(boundary, width, height);
     contour = simplify_chain_approx(contour);
 
     // swapping coordinates from (y, x) to (x, y)
@@ -228,11 +192,87 @@ std::vector<Coordinate> find_contour_chain_approx_simple(const std::vector<uint8
 
     // finally something to parallelize
     // we need to check if the speedup from parallelizing exceeds the overhead
-    thrust::device_vector<Coordinate> d_contour = contour;
+    thrust::device_vector<Coordinate<int>> d_contour = contour;
     thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_and_b());
     thrust::copy(d_contour.begin(), d_contour.end(), contour.begin());
 
     return contour;
+}
+
+// ______________________________________________________________________________________________
+
+// custom CUDA kernel for moving average smoothing
+// one thread per contour point, each thread computes the average of its window independently
+__global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<int> *smoothed, int half_window, int n)
+{
+    // getting the global thread index
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    // we only need as many threads as there are contour points
+    if (i < n)
+    {
+        // keeping separate sums for the x and y coordinates
+        float sum_a = 0.0f;
+        float sum_b = 0.0f;
+        // iterating over the window within the vector
+        // window_j is the index within the window
+        // the center of the window is at offset 0
+
+        // for large window sizes, it would make sense
+        // to also parallelize this loop
+        // so one thread per window element
+        // but would require reduction using shared memory
+        // does not pay off for our small windows between 5 and 15
+        for (int window_j = -half_window; window_j <= half_window; ++window_j)
+        {
+            // window_i is the index within the vector mapped back to the whole vector
+            int window_i = (i + window_j + n) % n;
+            sum_a += static_cast<float>(points[window_i].a);
+            sum_b += static_cast<float>(points[window_i].b);
+        }
+
+        // calculating the average
+        const float divisor = static_cast<float>(2 * half_window + 1);
+        smoothed[i] = Coordinate<int>{
+            static_cast<int>(roundf(sum_a / divisor)),
+            static_cast<int>(roundf(sum_b / divisor))};
+    }
+}
+
+// moving average smoothing of the contour points vector
+CoordinateVector<int> smooth_contour(const CoordinateVector<int> &points, int window)
+{
+    // in case the contour is empty
+    // or the window size is too small or too large
+    const int n = static_cast<int>(points.size());
+    if (points.empty() || window <= 1 || window >= n)
+    {
+        return points;
+    }
+
+    // the smoothed contour vector will be the same size as the original
+    int half_window = window / 2;
+
+    // using thrust to create device vectors
+    // so we do not need to manually free the memory afterwards, thrust takes care of that
+    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
+    thrust::device_vector<Coordinate<int>> d_smoothed(n);
+
+    // the many cores lectures taught us that this is a good choice
+    // of threads per block and number of blocks for most GPUs
+    int threads_per_block = 256;
+    int num_blocks = 256;
+    // calling the kernel
+    moving_average_kernel<<<num_blocks, threads_per_block>>>(
+        thrust::raw_pointer_cast(d_points.data()),
+        thrust::raw_pointer_cast(d_smoothed.data()),
+        half_window, n);
+
+    // copying the result back from device to host
+    CoordinateVector<int> smoothed(n);
+    thrust::copy(d_smoothed.begin(), d_smoothed.end(), smoothed.begin());
+
+    return smoothed;
 }
 
 // ______________________________________________________________________________________________
@@ -246,14 +286,14 @@ std::vector<Coordinate> find_contour_chain_approx_simple(const std::vector<uint8
 // needed for finding the min and max x and y of the contour points
 struct compare_x
 {
-    __host__ __device__ bool operator()(const Coordinate &lhs, const Coordinate &rhs) const
+    __host__ __device__ bool operator()(const Coordinate<int> &lhs, const Coordinate<int> &rhs) const
     {
         return lhs.a < rhs.a;
     }
 };
 struct compare_y
 {
-    __host__ __device__ bool operator()(const Coordinate &lhs, const Coordinate &rhs) const
+    __host__ __device__ bool operator()(const Coordinate<int> &lhs, const Coordinate<int> &rhs) const
     {
         return lhs.b < rhs.b;
     }
@@ -265,7 +305,7 @@ struct square_distance
 {
     float cx;
     float cy;
-    __host__ __device__ float operator()(const Coordinate &p) const
+    __host__ __device__ float operator()(const Coordinate<int> &p) const
     {
         float dx = p.a - cx;
         float dy = p.b - cy;
@@ -274,25 +314,25 @@ struct square_distance
 };
 
 // Calculates the center and radius of a circle that encloses the contour points
-std::pair<CoordinateFloat, float> enclosing_circle_approx(const std::vector<Coordinate> &points)
+std::pair<Coordinate<float>, float> enclosing_circle_approx(const CoordinateVector<int> &points)
 {
     if (points.empty())
     {
-        return std::make_pair(CoordinateFloat{0.0f, 0.0f}, 0.0f);
+        return std::make_pair(Coordinate<float>{0.0f, 0.0f}, 0.0f);
     }
 
     // copying the contour points to the device
-    thrust::device_vector<Coordinate> d_points(points.begin(), points.end());
+    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
 
     // finding the min and max x and y coordinates of the contour points in parallel
     auto minmax_x = thrust::minmax_element(d_points.begin(), d_points.end(), compare_x());
     auto minmax_y = thrust::minmax_element(d_points.begin(), d_points.end(), compare_y());
 
     // copying back from device to host
-    Coordinate cx_min = *(minmax_x.first);
-    Coordinate cx_max = *(minmax_x.second);
-    Coordinate cy_min = *(minmax_y.first);
-    Coordinate cy_max = *(minmax_y.second);
+    Coordinate<int> cx_min = *(minmax_x.first);
+    Coordinate<int> cx_max = *(minmax_x.second);
+    Coordinate<int> cy_min = *(minmax_y.first);
+    Coordinate<int> cy_max = *(minmax_y.second);
 
     // computing the center based on the min and max x and y
     float cx = (cx_min.a + cx_max.a) / 2.0f;
@@ -309,14 +349,15 @@ std::pair<CoordinateFloat, float> enclosing_circle_approx(const std::vector<Coor
     );
 
     // taking the sqrt to get the actual radius from the max square distance
-    float radius = std::sqrt(max_sq_dist);
-    return std::make_pair(CoordinateFloat{cx, cy}, radius);
+    // using cuda sqrtf for consistency
+    float radius = sqrtf(max_sq_dist);
+    return std::make_pair(Coordinate<float>{cx, cy}, radius);
 }
 
 // ______________________________________________________________________________________________
 
 // Finally a real custom cuda kernel
-__global__ void radial_signal_kernel(const Coordinate *points, float *signal, int num_points, CoordinateFloat center)
+__global__ void radial_signal_kernel(const Coordinate<int> *points, float *signal, int num_points, Coordinate<float> center)
 {
     // getting the global thread index
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -333,13 +374,13 @@ __global__ void radial_signal_kernel(const Coordinate *points, float *signal, in
 }
 
 // Calculates a vector of distances from the center, one for each contour point
-std::vector<float> radial_signal(const std::vector<Coordinate> &points, CoordinateFloat center)
+Signal radial_signal(const CoordinateVector<int> &points, Coordinate<float> center)
 {
-    std::vector<float> signal(points.size());
+    Signal signal(points.size());
     // using thrust to create device vectors
     // so we do not need to manually free the memory afterwards, thrust takes care of that
     thrust::device_vector<float> d_signal(points.size());
-    thrust::device_vector<Coordinate> d_points(points.begin(), points.end());
+    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
 
     // the many cores lectures taught us that this is a good choice
     // of threads per block and number of blocks for most GPUs
