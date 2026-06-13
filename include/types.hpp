@@ -14,6 +14,7 @@ struct ImageU8{
 };
 
 struct ImageI32{
+    // QUESTION: Do we really need 32 bit?
     int width;
     int height;
     std::vector<int32_t> data; // row-major order
@@ -56,6 +57,10 @@ struct Coordinate {
 //     float a;
 //     float b;
 // };
+
+
+template <typename T>
+using CoordinateVector = std::vector<Coordinate<T>>;
 
 using Signal = std::vector<float>;
 using Corners = std::array<int, 4>;
