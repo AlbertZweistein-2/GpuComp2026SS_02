@@ -181,14 +181,15 @@ CoordinateVector<int> find_contour_chain_approx_simple(const std::vector<uint8_t
 
 // moving average smoothing of the contour points vector
 CoordinateVector<int> smooth_contour(const CoordinateVector<int>& points, int window) {
+    // casting size_t to int
+    const int n = static_cast<int>(points.size());
+
     // in case the contour is empty
     // or the window size is too small or too large
     if (points.empty() || window <= 1 || window >= n) {
     return points;
-}
+    }
 
-    // casting size_t to int
-    const int n = static_cast<int>(points.size());
     // the smoothed contour vector will be the same size as the original 
     CoordinateVector<int> smoothed(n);
     int half_window = window / 2;
@@ -247,6 +248,7 @@ std::pair<Coordinate<float>, float> enclosing_circle_approx(const CoordinateVect
 
     // again iterating over all contour points
     // and finding which one has the max distance to the center
+    // we can not merge these two loops as we first need the center to then calculate the distances
     float max_sq_dist = 0.0f;
     for (size_t i = 0; i < points.size(); ++i) {
         float dx = points[i].a - cx;
