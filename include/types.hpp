@@ -38,14 +38,22 @@ struct Coordinate {
 
     // some custom operators
     // needed for the std::set to store unique coordinates during Moore neighbor tracing
-    __host__ __device__ bool operator<(const Coordinate& c2) const {
+    #ifdef __CUDACC__
+        // making the operator compatile with use in cuda kernels when compiled with nvcc
+        __host__ __device__
+    #endif
+    bool operator<(const Coordinate& c2) const {
         if (b != c2.b) return b < c2.b;
         return a < c2.a;
     }
 
     // needed for the convergence criterion in the Moore neighbor tracing
     // converges when the current point equals the starting point
-    __host__ __device__ bool operator==(const Coordinate& c2) const {
+    #ifdef __CUDACC__
+        // making the operator compatile with use in cuda kernels when compiled with nvcc
+        __host__ __device__ 
+    #endif
+    bool operator==(const Coordinate& c2) const {
         return a == c2.a && b == c2.b;
     }
 };

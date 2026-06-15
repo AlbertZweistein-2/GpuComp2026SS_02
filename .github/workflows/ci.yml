@@ -1,4 +1,4 @@
-name: C++ Serial Tests
+name: C++ Tests
 
 on:
   push:
@@ -7,39 +7,93 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-and-test:
-    name: Build and Run C++ Tests
+  serial-tests:
+    name: Serial C++ Tests
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Compile Serial test_runner
-        working-directory: src/serial_cpp
-        # Compiling with standard C++17 to ensure it works identically across all modern g++ versions
-        run: g++ -std=c++17 test_main.cpp contour_to_signal.cpp cleaning_and_boundary_extraction.cpp signal_analysis.cpp -o test_runner
-        
-      - name: Run Serial test_runner
-        working-directory: src/serial_cpp
-        run: ./test_runner
+      - name: Cache OpenCV (APT archives)
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-opencv
 
-        # Instead of downloading nvcc every time we commit, we can cache it
+      - name: Install OpenCV
+        run: |
+          sudo rm -f /var/cache/apt/archives/lock
+          sudo apt-get update
+          sudo apt-get install -y libopencv-dev
+
+      - name: Compile serial modules
+        run: |
+          g++ -std=c++17 -c src/serial/preprocessing.cpp       -I include
+          g++ -std=c++17 -c src/serial/cleaning.cpp            -I include
+          g++ -std=c++17 -c src/serial/boundary_extraction.cpp -I include
+          g++ -std=c++17 -c src/serial/component_labeling.cpp  -I include
+          g++ -std=c++17 -c src/serial/contour_to_signal.cpp   -I include
+          g++ -std=c++17 -c src/serial/signal_analysis.cpp     -I include
+          g++ -std=c++17 -c src/serial/visualization.cpp       -I include $(pkg-config --cflags opencv4)
+          g++ -std=c++17 -c src/serial/pipeline.cpp            -I include
+
+      - name: Test contour_to_signal
+        run: |
+          g++ -std=c++17 src/serial/tests/test_contour_to_signal.cpp \
+              src/serial/contour_to_signal.cpp \
+              -I include -o test_contour_to_signal
+          ./test_contour_to_signal
+
+      - name: Test cleaning
+        run: |
+          g++ -std=c++17 src/serial/tests/test_cleaning.cpp \
+              src/serial/cleaning.cpp \
+              src/serial/boundary_extraction.cpp \
+              src/serial/component_labeling.cpp \
+              -I include -o test_cleaning
+          ./test_cleaning
+
+      - name: Test visualization
+        run: |
+          g++ -std=c++17 src/serial/tests/test_visualization.cpp \
+              src/serial/visualization.cpp \
+              -I include $(pkg-config --cflags --libs opencv4) -o test_visualization
+          ./test_visualization
+
+      - name: Cleanup test executables
+        if: always()
+        run: rm -f test_contour_to_signal test_cleaning test_visualization
+
+  cuda-compile:
+    name: CUDA Compilation Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Cache CUDA Toolkit (APT archives)
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
           key: ${{ runner.os }}-apt-cuda-toolkit
-          
-      - name: Install CUDA Toolkit dependencies
+
+      - name: Install CUDA Toolkit
         run: |
           sudo rm -f /var/cache/apt/archives/lock
           sudo apt-get update
           sudo apt-get install -y nvidia-cuda-toolkit
-          
-      - name: Compile CUDA test_runner
-        working-directory: src/serial_cpp
-        # We can only test cuda files by compiling them with nvcc
-        # As there are no GPUs on GitHub Actions Servers
-        # Replace cpp file with cu file when ready, as we use the same test_main.cpp for both 
-        run: nvcc -std=c++17 test_main.cpp ../parallel_cpp/contour_to_signal.cu ../parallel_cpp/cleaning_and_boundary_extraction.cu cleaning_and_boundary_extraction.cpp signal_analysis.cpp -o cuda_test_runner
+
+      - name: Compile contour_to_signal.cu
+        run: nvcc -std=c++17 -c src/parallel/contour_to_signal.cu -I include
+
+      - name: Compile cleaning_and_boundary_extraction.cu
+        run: nvcc -std=c++17 -c src/parallel/cleaning_and_boundary_extraction.cu -I include
+
+      - name: Compile signal_analysis_main.cu
+        run: nvcc -std=c++17 -c src/parallel/signal_analysis_main.cu -I include
+
+      - name: Cleanup CUDA object files
+        if: always()
+        run: rm -f *.o
