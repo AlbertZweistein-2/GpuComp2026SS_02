@@ -22,7 +22,10 @@
 
 // Moore neighbor tracing algorithm to get the vector of contour coordinates
 // Inherently sequential, therefore not parallelizeable
-// Gemini recommends not to parallelize the contour tracing, very complex for little speedup
+// Not sensible to parallelize this, options like one thread per contour point
+// or splitting the image into chunks and separately doing contour tracing
+// all leads to messy reordering and stitching of contours
+// so very complex for very little speedup
 CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int width, int height)
 {
 
@@ -123,7 +126,8 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
 
 // Removes unnecessary points along straight lines, we only need the corners
 // Also inherently sequential, therefore not parallelizeable
-// Gemini also recommends not to parallelize the contour simplification, very complex for little speedup
+// As explained for the last function, also not sensibly parallelizeable
+// very complex for very little speeduo
 CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour)
 {
     if (contour.size() < 3)
@@ -205,8 +209,30 @@ CoordinateVector<int> find_contour_chain_approx_simple(const std::vector<uint8_t
 // one thread per contour point, each thread computes the average of its window independently
 __global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<int> *smoothed, int half_window, int n)
 {
+    // we will load the contour points into shared memory to speed up the reads
+    extern __shared__ Coordinate<int> s_points[];
+
     // getting the global thread index
     int i = blockIdx.x * blockDim.x + threadIdx.x;
+    // getting the index within the block
+    int local_i = threadIdx.x;
+
+    // each thread loads one point into shared memory
+    if (i < n)
+    {
+        s_points[local_i + half_window] = points[i];
+    }
+
+    // loading the left and right border points
+    // this is for windows that extend beyond the border of the points assigned the the block
+    if (local_i < half_window)
+    {
+        s_points[local_i + blockDim.x + half_window] = points[(i + blockDim.x) % n];
+        s_points[local_i] = points[(i - half_window + n) % n];
+    }
+
+    // barrier to make sure all elements are loaded
+    __syncthreads();
 
     // we only need as many threads as there are contour points
     if (i < n)
@@ -220,15 +246,14 @@ __global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<
 
         // for large window sizes, it would make sense
         // to also parallelize this loop
-        // so one thread per window element
-        // but would require reduction using shared memory
-        // does not pay off for our small windows between 5 and 15
+        // so one thread per window element and reduction using shared memory
+        // But for our small windows of 5 or 7 the overhead woudl probably dominate
         for (int window_j = -half_window; window_j <= half_window; ++window_j)
         {
             // window_i is the index within the vector mapped back to the whole vector
-            int window_i = (i + window_j + n) % n;
-            sum_a += static_cast<float>(points[window_i].a);
-            sum_b += static_cast<float>(points[window_i].b);
+            int window_i = local_i + half_window + window_j;
+            sum_a += static_cast<float>(s_points[window_i].a);
+            sum_b += static_cast<float>(s_points[window_i].b);
         }
 
         // calculating the average
@@ -262,8 +287,10 @@ CoordinateVector<int> smooth_contour(const CoordinateVector<int> &points, int wi
     // of threads per block and number of blocks for most GPUs
     int threads_per_block = 256;
     int num_blocks = 256;
+    // shared memory must also include the border points on each side
+    int shared_mem_size = (threads_per_block + 2 * half_window) * sizeof(Coordinate<int>);
     // calling the kernel
-    moving_average_kernel<<<num_blocks, threads_per_block>>>(
+    moving_average_kernel<<<num_blocks, threads_per_block, shared_mem_size>>>(
         thrust::raw_pointer_cast(d_points.data()),
         thrust::raw_pointer_cast(d_smoothed.data()),
         half_window, n);
