@@ -27,10 +27,10 @@
 #include <vector>
 
 // stb_image - single-header image loader (place stb_image.h in the same folder)
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
+//#define STB_IMAGE_IMPLEMENTATION
+//#include "stb_image.h"
+//#define STB_IMAGE_WRITE_IMPLEMENTATION
+//#include "stb_image_write.h"
 
 #include "serial/preprocessing.hpp"
 #include "helpers.hpp"
