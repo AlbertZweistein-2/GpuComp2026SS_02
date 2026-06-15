@@ -586,7 +586,7 @@ int main(int argc, char** argv)
 
     
     // CUDA preprocessing
-    auto res = preprocess_CUDA(rgb, W, H, 15, 1.0f);
+    auto res = preprocess_cuda(rgb, W, H, 15, 1.0f);
 
     stbi_image_free(rgb);
 
