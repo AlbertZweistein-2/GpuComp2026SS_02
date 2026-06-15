@@ -10,7 +10,7 @@
  *   5. Binarization
  *
  * Compile:
- *   g++ -O2 -std=c++17 -o preprocessing_serial preprocessing_serial.cpp -lm
+ *   g++ -O2 -std=c++17 -o preprocessing_serial preprocessing.cpp
  *
  * Usage:
  *   ./preprocessing_serial                        # loads ../../data/single.JPG
@@ -32,8 +32,8 @@
 //#define STB_IMAGE_WRITE_IMPLEMENTATION
 //#include "stb_image_write.h"
 
-#include "serial/preprocessing.hpp"
-#include "helpers.hpp"
+#include "../../include/serial/preprocessing.hpp"
+#include "../../include/helpers.hpp"
 // ─── Constants (same as the CUDA implementation) ─────────────────────────────
 static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS  = 256;
@@ -119,9 +119,6 @@ static std::vector<float> make_gaussian_kernel(int ksize, float sigma)
 // Serial version of the `gaussian_blur_shared` CUDA kernel.
 // Border handling: clamp (edge pixels are repeated).
 //
-// Optimization note: the CUDA version separates the kernel (horizontal then vertical).
-// That optimization could be applied here as well, but direct 2-D convolution
-// is sufficient for the serial reference implementation.
 // -----------------------------------------------------------------------------
 static void gaussian_blur(
     const std::vector<float>& in,
@@ -168,10 +165,7 @@ static void compute_histogram(
 
 // -----------------------------------------------------------------------------
 // STEP 4b — Otsu threshold
-//
-// Maximize inter-class variance between foreground and background.
-// Same logic as `otsu_from_histogram()` in the CUDA implementation
-// and the Python reference (`otsu_threshold`).
+// Computes the Otsu threshold from the histogram.
 // -----------------------------------------------------------------------------
 static float otsu_threshold(
         const std::vector<uint32_t>& hist,
@@ -220,6 +214,53 @@ static void binarize(
 
 }
 
+
+
+// -----------------------------------------------------------------------------
+// STEP 6 - Morphological Opening
+// -----------------------------------------------------------------------------
+static void morphology_filter(
+    const std::vector<uint8_t>& in,
+    int width,
+    int height,
+    int radius,
+    bool dilate,
+    std::vector<uint8_t>& out)
+{
+    out.resize(in.size());
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+
+            uint8_t result = dilate ? 0u : 255u;
+
+            for (int dy = -radius; dy <= radius; ++dy) {
+                for (int dx = -radius; dx <= radius; ++dx) {
+
+                    int sy = clamp(y + dy, 0, height - 1);
+                    int sx = clamp(x + dx, 0, width - 1);
+
+                    uint8_t value = in[sy * width + sx];
+
+                    if (dilate) {
+                        if (value > result)
+                            result = value;
+                    } else {
+                        if (value < result)
+                            result = value;
+                    }
+                }
+            }
+
+            out[y * width + x] = result;
+        }
+    }
+}
+
+
+
+
+
 // -----------------------------------------------------------------------------
 // Main pipeline — combines all steps
 // -----------------------------------------------------------------------------
@@ -254,8 +295,30 @@ ImageU8 preprocess(
     // 4b — Otsu
     auto threshold = otsu_threshold(hist, width * height);
 
-    // 5 — Binarization
-    binarize(blurred, threshold, result.data);
+   // 5 — Binarization
+    std::vector<uint8_t> binary;
+    binarize(blurred, threshold, binary);
+
+    // 6 — Morphological Opening
+    int morph_radius = 2;   // 1 = 3x3 Filter
+
+    std::vector<uint8_t> eroded;
+
+    morphology_filter(
+        binary,
+        width,
+        height,
+        morph_radius,
+        false,      // erosion
+        eroded);
+
+    morphology_filter(
+        eroded,
+        width,
+        height,
+        morph_radius,
+        true,       // dilation
+        result.data);
 
     return result;
 }
@@ -263,63 +326,53 @@ ImageU8 preprocess(
 // ─────────────────────────────────────────────────────────────────────────────
 // main
 // ─────────────────────────────────────────────────────────────────────────────
-// int main(int argc, char** argv)
-// {
-//     const char* input_path  = (argc > 1) ? argv[1] : "../../data/single.JPG";
-//     // Build output path by prefixing the input filename with "binary_" and using .png
-//     std::string input_str = input_path;
-//     std::string output_path;
-//     {
-//         size_t pos = input_str.find_last_of("/\\");
-//         std::string dir = (pos == std::string::npos) ? std::string() : input_str.substr(0, pos + 1);
-//         std::string filename = (pos == std::string::npos) ? input_str : input_str.substr(pos + 1);
-//         size_t dot = filename.find_last_of('.');
-//         std::string base = (dot == std::string::npos) ? filename : filename.substr(0, dot);
-//         output_path = dir + "binary_" + base + ".png";
-//     }
+int main(int argc, char** argv)
+{
+    const char* input_path  = (argc > 1) ? argv[1] : "../../data/single.JPG";
+    // Build output path by prefixing the input filename with "binary_" and using .png
+    std::string input_str = input_path;
+    std::string output_path;
+    {
+        size_t pos = input_str.find_last_of("/\\");
+        std::string dir = (pos == std::string::npos) ? std::string() : input_str.substr(0, pos + 1);
+        std::string filename = (pos == std::string::npos) ? input_str : input_str.substr(pos + 1);
+        size_t dot = filename.find_last_of('.');
+        std::string base = (dot == std::string::npos) ? filename : filename.substr(0, dot);
+        output_path = dir + "binary_" + base + ".png";
+    }
 
-//     // Load image
-//     int W, H, channels;
-//     uint8_t* rgb = stbi_load(input_path, &W, &H, &channels, 3);
-//     if (!rgb) {
-//         std::cerr << "Error: Could not load image: " << input_path
-//                   << "\n" << stbi_failure_reason() << "\n";
-//         return EXIT_FAILURE;
-//     }
-//     std::cout << "Loaded image: " << input_path
-//               << "  (" << W << " x " << H << ")\n";
+    // Load image
+    int W, H, channels;
+    uint8_t* rgb = stbi_load(input_path, &W, &H, &channels, 3);
+    if (!rgb) {
+        std::cerr << "Error: Could not load image: " << input_path
+                  << "\n" << stbi_failure_reason() << "\n";
+        return EXIT_FAILURE;
+    }
+    std::cout << "Loaded image: " << input_path
+              << "  (" << W << " x " << H << ")\n";
 
-//     // Run pipeline (ksize=5, sigma=1.0 — same as Python reference)
-//     auto res = preprocess(rgb, W, H, 5, 1.0f);
-//     stbi_image_free(rgb);
+    // Run pipeline (ksize=5, sigma=1.0 — same as Python reference)
+    auto res = preprocess(rgb, W, H, 5, 1.0f);
+    stbi_image_free(rgb);
 
-//     // Statistik
-//     int white = 0;
-//     for (uint8_t v : res.binary) white += (v == 255);
-//     int total = W * H;
+    // Statistik
+    int white = 0;
+for (uint8_t v : res.data)
+    white += (v == 255);
 
-//     std::cout << "\n-- Result ---------------------------------\n";
-//     std::cout << "Otsu threshold    : " << res.threshold        << "\n";
-//     std::cout << "Foreground        : " << white
-//               << " pixels  (" << 100.f * white / total << " %)\n";
-//     std::cout << "Background        : " << (total - white)
-//               << " pixels  (" << 100.f * (total - white) / total << " %)\n";
+int total = W * H;
 
-//     std::cout << "\n-- Timings (serial) ------------------------\n";
-//     std::cout << "  RGB -> Grayscale : " << res.timing.grayscale << " ms\n";
-//     std::cout << "  Normalization    : " << res.timing.normalize << " ms\n";
-//     std::cout << "  Gaussian Blur    : " << res.timing.blur      << " ms\n";
-//     std::cout << "  Histogram        : " << res.timing.histogram << " ms\n";
-//     std::cout << "  Otsu             : " << res.timing.otsu      << " ms\n";
-//     std::cout << "  Binarize         : " << res.timing.binarize  << " ms\n";
-//     std::cout << "  -----------------------------------------\n";
-//     std::cout << "  Total            : " << res.timing.total     << " ms\n";
+std::cout << "\n-- Result ---------------------------------\n";
+std::cout << "Foreground        : " << white
+          << " pixels  (" << 100.f * white / total << " %)\n";
+std::cout << "Background        : " << (total - white)
+          << " pixels  (" << 100.f * (total - white) / total << " %)\n";
 
-//     // Save binary image
-//     if (stbi_write_png(output_path.c_str(), W, H, 1, res.binary.data(), W))
-//         std::cout << "\nSaved: " << output_path << "\n";
-//     else
-//         std::cerr << "Error saving: " << output_path << "\n";
+if (stbi_write_png(output_path.c_str(), W, H, 1, res.data.data(), W))
+    std::cout << "\nSaved: " << output_path << "\n";
+else
+    std::cerr << "Error saving: " << output_path << "\n";
 
-//     return EXIT_SUCCESS;
-// }
+    return EXIT_SUCCESS;
+}

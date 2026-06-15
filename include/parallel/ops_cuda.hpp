@@ -17,12 +17,13 @@
 // translation units. Stages without a PIPELINE_USE_CUDA_* flag keep using the
 // serial implementation.
 
-ImageU8 preprocess_cuda(
+void preprocess_cuda(
     const uint8_t* rgb,
     int width,
     int height,
     int ksize = 5,
-    float sigma = 1.0f
+    float sigma = 1.0f,
+    ImageU8& result
 );
 
 void morphological_open_cuda(

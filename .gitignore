@@ -23,3 +23,7 @@ binary_output_serial.png
 binary_output.png
 
 build/
+
+
+#
+benchmark_prepro.sh

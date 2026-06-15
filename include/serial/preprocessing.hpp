@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "types.hpp"
+#include "../types.hpp"
 
 ImageU8 preprocess(
     const uint8_t* rgb,
