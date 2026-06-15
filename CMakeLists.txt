@@ -12,7 +12,7 @@ endif()
 
 option(PIPELINE_DEBUG_OUTPUT "Compile serial pipeline debug logging and summary output" ON)
 option(PIPELINE_SUB_TIMINGS "Measure and print serial pipeline sub-stage timings when debug output is enabled" ON)
-option(PIPELINE_WRITE_OUTPUT_IMAGE "Write a serial pipeline overlay image with piece contours and bounding boxes" OFF)
+option(PIPELINE_WRITE_OUTPUT_IMAGE "Write a serial pipeline overlay image with piece contours and bounding boxes" ON)
 option(PIPELINE_ENABLE_CUDA "Enable optional CUDA pipeline backends" OFF)
 set(PIPELINE_OPTIMIZATION_LEVEL "-O3" CACHE STRING "Optimization flag for serial C++ Release builds, e.g. -O2 or -O3")
 set(PIPELINE_CUDA_SOURCES "" CACHE STRING "Semicolon-separated CUDA sources to build when PIPELINE_ENABLE_CUDA is ON")
@@ -24,10 +24,10 @@ set(SERIAL_PIPELINE_MODULE_SOURCES
     src/serial/component_labeling.cpp
     src/serial/contour_to_signal.cpp
     src/serial/signal_analysis.cpp
+    src/serial/stb_image_impl.cpp
 )
 
 if(PIPELINE_WRITE_OUTPUT_IMAGE)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
     list(APPEND SERIAL_PIPELINE_MODULE_SOURCES
         src/serial/visualization.cpp
     )
@@ -47,18 +47,6 @@ target_compile_options(serial_pipeline_modules
         $<$<CONFIG:Release>:${PIPELINE_OPTIMIZATION_LEVEL}>
         $<$<CONFIG:RelWithDebInfo>:${PIPELINE_OPTIMIZATION_LEVEL}>
 )
-
-if(PIPELINE_WRITE_OUTPUT_IMAGE)
-    target_include_directories(serial_pipeline_modules
-        PUBLIC
-            ${OpenCV_INCLUDE_DIRS}
-    )
-
-    target_link_libraries(serial_pipeline_modules
-        PUBLIC
-            ${OpenCV_LIBS}
-    )
-endif()
 
 add_library(pipeline_core
     src/serial/pipeline.cpp
@@ -115,12 +103,10 @@ foreach(target IN ITEMS pipeline_core pipeline)
         )
     endif()
 
-    if(PIPELINE_WRITE_OUTPUT_IMAGE)
-        target_compile_definitions(${target}
-            PRIVATE
-                PIPELINE_WRITE_OUTPUT_IMAGE=1
-        )
-    endif()
+    target_compile_definitions(${target}
+        PRIVATE
+            PIPELINE_WRITE_OUTPUT_IMAGE=$<BOOL:${PIPELINE_WRITE_OUTPUT_IMAGE}>
+    )
 endforeach()
 
 if(PIPELINE_ENABLE_CUDA)

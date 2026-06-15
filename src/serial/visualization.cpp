@@ -8,9 +8,11 @@
 #include <algorithm>
 #include <fstream>
 #include <iostream>
+#include <cstddef>
 #include <string>
 #include <vector>
 
+#include "serial/signal_analysis.hpp"
 #include "types.hpp"
 
 // ______________________________________________________________________________________________
@@ -143,14 +145,16 @@ void draw_piece_overlays(
     const std::vector<PuzzlePiece>& pieces,
     const std::string& output_path)
 {
-    // working on a copy so we don't modify the input
-    std::vector<uint8_t> img = rgb_data;
+    const float label_font_size = 40.0f;
 
-    for (size_t p = 0; p < regions.size(); ++p)
+    // working on a copy so we don't modify the input
+    const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
+    std::vector<uint8_t> img(rgb_data, rgb_data + pixel_count);
+
+    for (const PuzzlePiece& piece : pieces)
     {
-        const Region& region   = regions[p];
-        const CoordinateVector<int>& contour = contours[p];
-        const std::string& label = edge_labels[p];
+        const Region& region = piece.region;
+        const CoordinateVector<int>& contour = piece.contour;
 
         // drawing the contour in red
         // contour points are (x, y) after the coordinate swap in find_contour_chain_approx_simple
@@ -169,10 +173,12 @@ void draw_piece_overlays(
                   144, 238, 144, 2);
 
         // drawing the label text in blue above the bounding box
-        // format: "E{label}: {edge_type}" e.g. "E1: ????"
-        std::string text = "E" + std::to_string(region.label) + ": " + label;
-        int text_y = std::max(0, region.y - 20);
-        draw_text(img, width, height, text, region.x, text_y, 16.0f, 0, 0, 255);
+        const std::string piece_label = piece.class_label.empty()
+            ? edges_to_string(piece.edge_labels)
+            : piece.class_label;
+        std::string text = "Piece " + std::to_string(region.label) + " ; Class " + piece_label;
+        int text_y = std::max(0, region.y - static_cast<int>(label_font_size + 8.0f));
+        draw_text(img, width, height, text, region.x, text_y, label_font_size, 255, 255, 255);
     }
 
     // saving output image if path is provided

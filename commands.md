@@ -55,6 +55,12 @@ cmake -S . -B build
 cmake --build build --target pipeline -j
 ```
 
+Parallel build using all available CPU cores:
+
+```bash
+cmake --build build --target pipeline -j "$(nproc)"
+```
+
 ## Run Pipeline
 
 Run with the default image from `PipelineOptions`:
