@@ -19,6 +19,7 @@
 #include <numeric>
 #include <string>
 #include <vector>
+#include <array>
 
 
 // ============================================================================
@@ -76,6 +77,106 @@ static void save_floats(const std::string& path,
     for (float x : v) out << x << "\n";
     LOG("  saved " << v.size() << " floats -> " << path);
 }
+
+class PuzzleLookupTable {
+private:
+    // Flat array now holds formatted strings instead of ints
+    std::array<std::string, 81> table;
+
+    // Helper: Convert edge character to Base-3 digit
+    int charToDigit(char c) const {
+        if (c == 'L') return 0; // Straight
+        if (c == 'V') return 1; // Knob
+        if (c == 'C') return 2; // Hole
+        return 0; 
+    }
+
+    // Helper: Convert a 4-character string to an integer index (0 - 80)
+    int getBase3Index(const std::string& s) const {
+        return charToDigit(s[0]) * 27 + 
+               charToDigit(s[1]) * 9 + 
+               charToDigit(s[2]) * 3 + 
+               charToDigit(s[3]) * 1;
+    }
+
+    // Helper: Rotate string left by one position
+    std::string rotate(const std::string& s) const {
+        return s.substr(1) + s[0];
+    }
+
+    // Helper: Determine category based on the number of straight edges
+    std::string getCategory(const std::string& s) const {
+        int l_count = std::count(s.begin(), s.end(), 'L');
+        if (l_count == 0) return "I"; // Interior
+        if (l_count == 1) return "E"; // Edge
+        if (l_count == 2) return "C"; // Corner
+        if (l_count == 3) return "T"; // Terminal (Rare/Edge case)
+        if (l_count == 4) return "S"; // Square/Standalone
+        return "U"; // Unknown
+    }
+
+public:
+    PuzzleLookupTable() {
+        // Initialize with empty strings
+        table.fill("");
+        
+        // Track unique IDs per category
+        int count_I = 0, count_E = 0, count_C = 0, count_T = 0, count_S = 0;
+
+        const char edges[] = {'L', 'V', 'C'};
+
+        // Precompute the table for all 81 combinations
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 3; ++j) {
+                for (int k = 0; k < 3; ++k) {
+                    for (int l = 0; l < 3; ++l) {
+                        std::string s = {edges[i], edges[j], edges[k], edges[l]};
+                        int idx = getBase3Index(s);
+
+                        // If this combination hasn't been processed yet
+                        if (table[idx].empty()) {
+                            // 1. Generate all rotations
+                            std::string r1 = rotate(s);
+                            std::string r2 = rotate(r1);
+                            std::string r3 = rotate(r2);
+
+                            // 2. Find the canonical (alphabetically smallest) rotation for consistent display
+                            std::string canonical = s;
+                            if (r1 < canonical) canonical = r1;
+                            if (r2 < canonical) canonical = r2;
+                            if (r3 < canonical) canonical = r3;
+
+                            // 3. Determine category and assign the next unique ID
+                            std::string cat = getCategory(canonical);
+                            int class_id = 0;
+                            
+                            if (cat == "I") class_id = count_I++;
+                            else if (cat == "E") class_id = count_E++;
+                            else if (cat == "C") class_id = count_C++;
+                            else if (cat == "T") class_id = count_T++;
+                            else if (cat == "S") class_id = count_S++;
+
+                            // 4. Construct the final formatted string (e.g., "E_1: CVCL")
+                            std::string final_label = cat + "_" + std::to_string(class_id) + ": " + canonical;
+
+                            // 5. Assign this same exact label to ALL rotations of this piece
+                            table[getBase3Index(s)]  = final_label;
+                            table[getBase3Index(r1)] = final_label;
+                            table[getBase3Index(r2)] = final_label;
+                            table[getBase3Index(r3)] = final_label;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // $O(1)$ Lookup function returning the formatted string
+    std::string getClassLabel(const std::string& edges) const {
+        if (edges.length() != 4) return "Invalid";
+        return table[getBase3Index(edges)];
+    }
+};
 
 
 // ============================================================================
@@ -181,7 +282,7 @@ static std::vector<Peak>
 find_triangular_peaks(const std::vector<float>& smooth,
                    const std::vector<int>&   candidates,
                    const Params&             p) {
-    LOG("\n[Stage 2c] filter peaks"
+    LOG("\n[Stage 2c] filter peaks" 
         "  min_dist=" << p.min_distance <<
         "  min_prom=" << p.min_prominence <<
         "  min_sharp=" << p.min_sharpness);
