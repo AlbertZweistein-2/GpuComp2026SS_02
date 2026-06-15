@@ -21,3 +21,5 @@ preprocessing
 # Ausgabebilder (optional, falls ihr die nicht tracken wollt)
 binary_output_serial.png
 binary_output.png
+
+build/

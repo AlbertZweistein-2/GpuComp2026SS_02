@@ -6,16 +6,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+option(PIPELINE_DEBUG_OUTPUT "Compile serial pipeline debug logging and summary output" ON)
+option(PIPELINE_SUB_TIMINGS "Measure and print serial pipeline sub-stage timings when debug output is enabled" ON)
 option(PIPELINE_ENABLE_CUDA "Enable optional CUDA pipeline backends" OFF)
-set(PIPELINE_CUDA_SOURCES "" CACHE STRING "Semicolon-separated CUDA source files that implement cuda/ops_cuda.hpp")
-set(PIPELINE_CUDA_STAGES "" CACHE STRING "Semicolon-separated CUDA stages, e.g. PREPROCESSING;RADIAL_SIGNAL")
+set(PIPELINE_CUDA_SOURCES "" CACHE STRING "Semicolon-separated CUDA sources to build when PIPELINE_ENABLE_CUDA is ON")
+
+set(SERIAL_PIPELINE_MODULE_SOURCES
+    src/serial/preprocessing.cpp
+    src/serial/cleaning.cpp
+    src/serial/boundary_extraction.cpp
+    src/serial/component_labeling.cpp
+    src/serial/contour_to_signal.cpp
+    src/serial/signal_analysis.cpp
+)
 
 add_library(serial_pipeline_modules
-    src/serial_cpp/preprocessing.cpp
-    src/serial_cpp/cleaning.cpp
-    src/serial_cpp/boundary_extraction.cpp
-    src/serial_cpp/component_labeling.cpp
-    src/serial_cpp/contour_to_signal.cpp
+    ${SERIAL_PIPELINE_MODULE_SOURCES}
 )
 
 target_include_directories(serial_pipeline_modules
@@ -24,7 +30,7 @@ target_include_directories(serial_pipeline_modules
 )
 
 add_library(pipeline_core
-    src/pipeline.cpp
+    src/serial/pipeline.cpp
 )
 
 target_include_directories(pipeline_core
@@ -38,7 +44,7 @@ target_link_libraries(pipeline_core
 )
 
 add_executable(pipeline
-    src/pipeline.cpp
+    src/serial/pipeline.cpp
 )
 
 target_compile_definitions(pipeline
@@ -50,6 +56,22 @@ target_link_libraries(pipeline
     PRIVATE
         serial_pipeline_modules
 )
+
+foreach(target IN ITEMS pipeline_core pipeline)
+    if(PIPELINE_DEBUG_OUTPUT)
+        target_compile_definitions(${target}
+            PRIVATE
+                DEBUG_LEVEL=1
+        )
+    endif()
+
+    if(PIPELINE_DEBUG_OUTPUT AND PIPELINE_SUB_TIMINGS)
+        target_compile_definitions(${target}
+            PRIVATE
+                SUB_TIMINGS=1
+        )
+    endif()
+endforeach()
 
 if(PIPELINE_ENABLE_CUDA)
     enable_language(CUDA)
@@ -74,16 +96,4 @@ if(PIPELINE_ENABLE_CUDA)
                 cuda_pipeline_modules
         )
     endif()
-
-    foreach(stage IN LISTS PIPELINE_CUDA_STAGES)
-        target_compile_definitions(pipeline_core
-            PUBLIC
-                PIPELINE_USE_CUDA_${stage}
-        )
-
-        target_compile_definitions(pipeline
-            PRIVATE
-                PIPELINE_USE_CUDA_${stage}
-        )
-    endforeach()
 endif()

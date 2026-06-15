@@ -1,1 +1,0 @@
-/usr/bin/g++ -g CMakeFiles/pipeline.dir/src/pipeline.cpp.o -o pipeline  libserial_pipeline_modules.a 

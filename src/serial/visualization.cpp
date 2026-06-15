@@ -73,5 +73,8 @@ void draw_piece_overlays(
         );
     }
 
-    cv::imwrite(output_path, bgr);
+    if (!output_path.empty())
+    {
+        cv::imwrite(output_path, bgr);
+    }
 }

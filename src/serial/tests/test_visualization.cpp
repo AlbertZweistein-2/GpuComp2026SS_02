@@ -65,8 +65,8 @@ void test_draw_piece_overlays(bool save_output = false)
     }
     else
     {
-        // run without saving to just verify it does not crash
-        draw_piece_overlays(rgb, width, height, regions, contours, labels, "/dev/null");
+        // run without saving, just verify it does not crash
+        draw_piece_overlays(rgb, width, height, regions, contours, labels, "");
     }
 
     std::cout << "test_draw_piece_overlays passed!" << std::endl;
