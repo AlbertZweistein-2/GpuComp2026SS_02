@@ -28,3 +28,18 @@ EdgeLabels classify_edges(
 );
 
 std::string edges_to_string(const EdgeLabels& labels);
+
+class PuzzleLookupTable {
+public:
+    PuzzleLookupTable();
+
+    std::string getClassLabel(const std::string& edges) const;
+
+private:
+    std::array<std::string, 81> table;
+
+    int charToDigit(char c) const;
+    int getBase3Index(const std::string& s) const;
+    std::string rotate(const std::string& s) const;
+    std::string getCategory(const std::string& s) const;
+};

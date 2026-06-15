@@ -8,34 +8,32 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+#include "serial/signal_analysis.hpp"
 #include "types.hpp"
 
 // ______________________________________________________________________________________________
 
 void draw_piece_overlays(
-    const std::vector<uint8_t>& rgb_data,
+    const uint8_t* rgb_data,
     int width,
     int height,
-    const std::vector<Region>& regions,
-    const std::vector<CoordinateVector<int>>& contours,
-    const std::vector<std::string>& edge_labels,
+    const std::vector<PuzzlePiece>& pieces,
     const std::string& output_path)
 {
     // wrapping the raw rgb data in an OpenCV matrix without copying
     // CV_8UC3 = 8 bit unsigned, 3 channels (RGB)
     cv::Mat image(height, width, CV_8UC3,
-        const_cast<uint8_t*>(rgb_data.data()));
+        const_cast<uint8_t*>(rgb_data));
 
     // OpenCV works in BGR, so we convert from RGB
     cv::Mat bgr;
     cv::cvtColor(image, bgr, cv::COLOR_RGB2BGR);
 
     // iterating over all pieces
-    for (size_t p = 0; p < regions.size(); ++p)
+    for (const PuzzlePiece& piece : pieces)
     {
-        const Region& region = regions[p];
-        const CoordinateVector<int>& contour = contours[p];
-        const std::string& label = edge_labels[p];
+        const Region& region = piece.region;
+        const CoordinateVector<int>& contour = piece.contour;
 
         // ______________________________________________________________________________________________
 
@@ -58,8 +56,10 @@ void draw_piece_overlays(
         // ______________________________________________________________________________________________
 
         // drawing the label text in blue
-        // format: "E{label}: {edge_type}" e.g. "E1: ????"
-        std::string text = "E" + std::to_string(region.label) + ": " + label;
+        const std::string piece_label = piece.class_label.empty()
+            ? edges_to_string(piece.edge_labels)
+            : piece.class_label;
+        std::string text = "E" + std::to_string(region.label) + ": " + piece_label;
         cv::Point text_pos(region.x, std::max(0, region.y - 8));
         cv::putText(
             bgr,

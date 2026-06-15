@@ -53,20 +53,28 @@ void test_draw_piece_overlays(bool save_output = false)
     region2.width  = 51;
     region2.height = 51;
 
-    std::vector<Region>                regions  = {region1, region2};
-    std::vector<CoordinateVector<int>> contours = {contour1, contour2};
-    std::vector<std::string>           labels   = {"????", "????"};
+    PuzzlePiece piece1;
+    piece1.region = region1;
+    piece1.contour = contour1;
+    piece1.class_label = "C_0: LLVC";
+
+    PuzzlePiece piece2;
+    piece2.region = region2;
+    piece2.contour = contour2;
+    piece2.class_label = "E_0: LVVC";
+
+    std::vector<PuzzlePiece> pieces = {piece1, piece2};
 
     if (save_output)
     {
         const std::string output_path = "data/pipeline_output/test_visualization_output.png";
-        draw_piece_overlays(rgb, width, height, regions, contours, labels, output_path);
+        draw_piece_overlays(rgb.data(), width, height, pieces, output_path);
         std::cout << "Output saved to: " << output_path << std::endl;
     }
     else
     {
         // run without saving, just verify it does not crash
-        draw_piece_overlays(rgb, width, height, regions, contours, labels, "");
+        draw_piece_overlays(rgb.data(), width, height, pieces, "");
     }
 
     std::cout << "test_draw_piece_overlays passed!" << std::endl;

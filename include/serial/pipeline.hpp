@@ -13,7 +13,6 @@ struct PipelineTimings {
     double preprocessing = 0.0;
     double cleaning = 0.0;
     double connected_components = 0.0;
-    double mask_extraction = 0.0;
     double boundary_extraction = 0.0;
     double contour_extraction = 0.0;
     double contour_smoothing = 0.0;
@@ -49,16 +48,12 @@ struct PipelineOptions {
 };
 
 struct PuzzlePiece {
-    int label = 0;
+    Region region{0, 0, 0, 0, 0, 0};
     CoordinateVector<int> contour;
-    CoordinateVector<int> smoothed_contour;
 
-    Coordinate<float> circle_center{0.0f, 0.0f};
-    float circle_radius = 0.0f;
-
-    Signal radial_signal;
-    Corners triangular_peak_indices{0, 0, 0, 0};
+    Corners corner_indices{0, 0, 0, 0};
     EdgeLabels edge_labels{EdgeType::Straight, EdgeType::Straight, EdgeType::Straight, EdgeType::Straight};
+    std::string class_label;
 };
 
 struct PipelineResult {

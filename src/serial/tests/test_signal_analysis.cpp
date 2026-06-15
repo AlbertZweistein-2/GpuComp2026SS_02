@@ -92,7 +92,7 @@ void test_classify_edges()
     assert(load_signal_csv("data/test_data/contour_to_signal/smoothed_signal.csv", smoothed));
 
     Corners corners = find_triangular_peaks(smoothed, 2.0f, 20.0f, 50);
-    std::array<EdgeType, 4> edge_labels = classify_edges(smoothed, corners, 1.08f, 0.92f);
+    std::array<EdgeType, 4> edge_labels = classify_edges(smoothed, corners, 0.1f);
     std::string shape = edges_to_string(edge_labels);
 
     for (int i = 1; i < 4; ++i) {
@@ -106,11 +106,27 @@ void test_classify_edges()
 
 // ______________________________________________________________________________________________
 
+void test_puzzle_lookup_table()
+{
+    std::cout << "Running test_puzzle_lookup_table..." << std::endl;
+
+    PuzzleLookupTable lookup;
+
+    assert(lookup.getClassLabel("LVVC") == lookup.getClassLabel("VVCL"));
+    assert(lookup.getClassLabel("LVVC").find(": ") != std::string::npos);
+    assert(lookup.getClassLabel("LVC") == "Invalid");
+
+    std::cout << "test_puzzle_lookup_table passed!" << std::endl;
+}
+
+// ______________________________________________________________________________________________
+
 int main()
 {
     test_smooth_signal();
     test_peak_detection();
     test_classify_edges();
+    test_puzzle_lookup_table();
 
     std::cout << "All signal_analysis tests passed!" << std::endl;
     return 0;
