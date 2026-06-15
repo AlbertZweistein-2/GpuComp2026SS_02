@@ -4,6 +4,15 @@
 #include <cstdint>
 #include <vector>
 
+#ifndef __CUDACC__
+#ifndef __host__
+#define __host__
+#endif
+#ifndef __device__
+#define __device__
+#endif
+#endif
+
 // Some custom structs
 // ______________________________________________________________________________________________
 
@@ -62,5 +71,8 @@ struct Coordinate {
 template <typename T>
 using CoordinateVector = std::vector<Coordinate<T>>;
 
+enum class EdgeType { Straight, Knob, Hole };
+
 using Signal = std::vector<float>;
 using Corners = std::array<int, 4>;
+using EdgeLabels = std::array<EdgeType, 4>;

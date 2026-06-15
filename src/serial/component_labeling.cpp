@@ -95,6 +95,9 @@ std::pair<ImageI32, std::vector<Region>> connected_components(
 
 ImageU8 extract_piece_mask(const ImageI32& labels, int target_label)
 {
+    // QUESTION:
+    // Maybe possible to return only an image of size 
+    // of the bounding box of the region, but then we would need to store the offset of the bounding box as well
     ImageU8 mask;
     mask.width = labels.width;
     mask.height = labels.height;

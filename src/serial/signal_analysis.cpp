@@ -154,14 +154,14 @@ char edge_char(EdgeType e) {
     return '?';
 }
 
-std::array<EdgeType,4> classify_edges(
+EdgeLabels classify_edges(
     const Signal& raw,
     const Corners& corners,
     float tol_factor)
 {
     int n = (int)raw.size();
-    std::array<EdgeType,4> labels{ EdgeType::Straight, EdgeType::Straight,
-                                   EdgeType::Straight, EdgeType::Straight };
+    EdgeLabels labels{ EdgeType::Straight, EdgeType::Straight,
+                        EdgeType::Straight, EdgeType::Straight };
     if (n < 4) return labels;
 
     for (int e = 0; e < 4; ++e) {
@@ -206,7 +206,7 @@ std::array<EdgeType,4> classify_edges(
     return labels;
 } 
 
-std::string edges_to_string(const std::array<EdgeType,4>& labels) {
+std::string edges_to_string(const EdgeLabels& labels) {
     std::string s;
     for (auto e : labels) s += edge_char(e);
     return s;  
