@@ -15,17 +15,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Cache OpenCV (APT archives)
+      - name: Cache DejaVu fonts (APT archives)
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: ${{ runner.os }}-apt-opencv
+          key: ${{ runner.os }}-apt-fonts-dejavu
 
-      - name: Install OpenCV
+      - name: Install DejaVu fonts
         run: |
           sudo rm -f /var/cache/apt/archives/lock
           sudo apt-get update
-          sudo apt-get install -y libopencv-dev
+          sudo apt-get install -y fonts-dejavu-core
+
+      - name: Copy font to data/fonts
+        run: |
+          mkdir -p data/fonts
+          cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf data/fonts/
+
+      # -- compile all serial .cpp files to check for errors --
 
       - name: Compile serial modules
         run: |
@@ -35,8 +42,10 @@ jobs:
           g++ -std=c++17 -c src/serial/component_labeling.cpp  -I include
           g++ -std=c++17 -c src/serial/contour_to_signal.cpp   -I include
           g++ -std=c++17 -c src/serial/signal_analysis.cpp     -I include
-          g++ -std=c++17 -c src/serial/visualization.cpp       -I include $(pkg-config --cflags opencv4)
+          g++ -std=c++17 -c src/serial/visualization.cpp       -I include
           g++ -std=c++17 -c src/serial/pipeline.cpp            -I include
+
+      # -- build and run tests --
 
       - name: Test contour_to_signal
         run: |
@@ -58,12 +67,12 @@ jobs:
         run: |
           g++ -std=c++17 src/serial/tests/test_visualization.cpp \
               src/serial/visualization.cpp \
-              -I include $(pkg-config --cflags --libs opencv4) -o test_visualization
+              -I include -o test_visualization
           ./test_visualization
 
       - name: Cleanup test executables
         if: always()
-        run: rm -f test_contour_to_signal test_cleaning test_visualization
+        run: rm -f test_contour_to_signal test_cleaning test_visualization *.o
 
   cuda-compile:
     name: CUDA Compilation Check
