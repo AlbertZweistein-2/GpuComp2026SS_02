@@ -367,23 +367,25 @@ __global__ void morphology_kernel(
 // Main pipeline — combines all steps
 // -----------------------------------------------------------------------------
 
-ImageU8 preprocess_cuda(
+void preprocess_cuda(
         const uint8_t* rgb,
         int width,
         int height,
         int ksize,
-        float sigma)
+        float sigma,
+        ImageU8& result)
 {
     if (width <= 0 || height <= 0)
         throw std::invalid_argument("width and height must be > 0");
+
     if (ksize < 1 || ksize % 2 == 0 || ksize > MAX_KERNEL)
         throw std::invalid_argument("ksize must be odd and <= 15");
 
-    ImageU8 result;
     result.width = width;
     result.height = height;
 
     int num_pixels = width * height;
+
     size_t rgb_bytes = static_cast<size_t>(num_pixels) * 3 * sizeof(uint8_t);
     size_t float_bytes = static_cast<size_t>(num_pixels) * sizeof(float);
     size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
@@ -409,9 +411,9 @@ ImageU8 preprocess_cuda(
     CUDA_CHECK(cudaMalloc(&d_threshold, sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_minmax, 2 * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_morph, binary_bytes));
-    
 
     CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgb_bytes, cudaMemcpyHostToDevice));
+
     CUDA_CHECK(cudaMemcpyToSymbol(
         d_gaussian_kernel,
         kernel.data(),
@@ -419,9 +421,7 @@ ImageU8 preprocess_cuda(
 
     int block1d = 256;
     int grid1d = (num_pixels + block1d - 1) / block1d;
-    //int grid1d = 1024;
 
-    // 1 — RGB -> Grayscale
     rgb_to_grayscale_kernel<<<grid1d, block1d>>>(
         d_rgb,
         d_gray,
@@ -429,31 +429,26 @@ ImageU8 preprocess_cuda(
         height);
     CUDA_CHECK(cudaGetLastError());
 
-    // 2a — Min/Max on GPU using Thrust
     thrust::device_ptr<float> gray_begin(d_gray);
     thrust::device_ptr<float> gray_end(d_gray + num_pixels);
+
     auto minmax_pair = thrust::minmax_element(
         thrust::device,
         gray_begin,
         gray_end);
 
-    // Important:
-    // minmax_pair points into d_gray. We copy the two values to a separate GPU
-    // buffer before normalizing d_gray in-place.
     copy_minmax_kernel<<<1, 1>>>(
         thrust::raw_pointer_cast(minmax_pair.first),
         thrust::raw_pointer_cast(minmax_pair.second),
         d_minmax);
     CUDA_CHECK(cudaGetLastError());
 
-    // 2b — Normalize
     normalize_kernel<<<grid1d, block1d>>>(
         d_gray,
         d_minmax,
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
-    // 3 — Gaussian Blur
     cudaEvent_t start, stop;
     CUDA_CHECK(cudaEventCreate(&start));
     CUDA_CHECK(cudaEventCreate(&stop));
@@ -479,24 +474,22 @@ ImageU8 preprocess_cuda(
     CUDA_CHECK(cudaEventDestroy(start));
     CUDA_CHECK(cudaEventDestroy(stop));
 
-    // 4a — Histogram
     CUDA_CHECK(cudaMemset(d_hist, 0, HIST_BINS * sizeof(uint32_t)));
 
     int hist_grid = std::min(grid1d, 1024);
+
     histogram_kernel<<<hist_grid, block1d>>>(
         d_blurred,
         d_hist,
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
-    // 4b — Otsu threshold
     otsu_threshold_kernel<<<1, 1>>>(
         d_hist,
         num_pixels,
         d_threshold);
     CUDA_CHECK(cudaGetLastError());
 
-    // 5 — Binarization
     binarize_kernel<<<grid1d, block1d>>>(
         d_blurred,
         d_threshold,
@@ -504,9 +497,7 @@ ImageU8 preprocess_cuda(
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
-    // 6 — Morphological Opening
-    // Erosion followed by dilation
-    int morph_radius = 2;   // 1 means 3x3 Filter 2 means 5x5 Filter etc.
+    int morph_radius = 2;
 
     morphology_kernel<<<grid1d, block1d>>>(
         d_binary,
@@ -514,7 +505,7 @@ ImageU8 preprocess_cuda(
         width,
         height,
         morph_radius,
-        false);             // false = erosion    true = dilation
+        false);
     CUDA_CHECK(cudaGetLastError());
 
     morphology_kernel<<<grid1d, block1d>>>(
@@ -523,9 +514,8 @@ ImageU8 preprocess_cuda(
         width,
         height,
         morph_radius,
-        true);              // true = dilation
+        true);
     CUDA_CHECK(cudaGetLastError());
-
 
     CUDA_CHECK(cudaMemcpy(
         result.data.data(),
@@ -541,9 +531,6 @@ ImageU8 preprocess_cuda(
     CUDA_CHECK(cudaFree(d_threshold));
     CUDA_CHECK(cudaFree(d_minmax));
     CUDA_CHECK(cudaFree(d_morph));
-
-
-    return result;
 }
 
 
