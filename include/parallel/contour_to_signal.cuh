@@ -6,19 +6,19 @@
 #include "types.hpp"
 
 // inherently sequential, not parallelized
-CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int width, int height);
+void trace_contour(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result);
 
 // inherently sequential, not parallelized
-CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour);
+void simplify_chain_approx(CoordinateVector<int> &contour);
 
-// sequential tracing, parallel coordinate swap using thrust
-CoordinateVector<int> find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height);
+// sequential tracing + parallel coordinate swap via thrust::transform
+void find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result);
 
-// parallel moving average using thrust
-CoordinateVector<int> smooth_contour(const CoordinateVector<int> &points, int window);
+// parallel moving average via custom CUDA kernel with shared memory
+void smooth_contour(CoordinateVector<int> &points, int window);
 
-// parallel min/max and transform_reduce using thrust
-std::pair<Coordinate<float>, float> enclosing_circle_approx(const CoordinateVector<int> &points);
+// parallel min/max + transform_reduce via thrust
+void enclosing_circle_approx(const CoordinateVector<int> &points, Coordinate<float> &center, float &radius);
 
 // custom CUDA kernel, one thread per contour point
-Signal radial_signal(const CoordinateVector<int> &points, Coordinate<float> center);
+void radial_signal(const CoordinateVector<int> &points, Coordinate<float> center, Signal &signal);

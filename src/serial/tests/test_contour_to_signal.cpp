@@ -96,7 +96,8 @@ void test_trace_contour()
     CoordinateVector<int> expected;
     assert(load_contour_csv("data/test_data/contour_to_signal/trace_contour.csv", expected));
 
-    CoordinateVector<int> actual = trace_contour(boundary, width, height);
+    CoordinateVector<int> actual;
+    trace_contour(boundary, width, height, actual);
 
     assert(actual.size() == expected.size());
     for (size_t i = 0; i < actual.size(); ++i) {
@@ -111,13 +112,13 @@ void test_simplify_chain_approx()
 {
     std::cout << "Running test_simplify_chain_approx..." << std::endl;
 
-    CoordinateVector<int> input;
-    assert(load_contour_csv("data/test_data/contour_to_signal/trace_contour.csv", input));
+    CoordinateVector<int> actual;
+    assert(load_contour_csv("data/test_data/contour_to_signal/trace_contour.csv", actual));
 
     CoordinateVector<int> expected;
     assert(load_contour_csv("data/test_data/contour_to_signal/simplify_chain_approx.csv", expected));
 
-    CoordinateVector<int> actual = simplify_chain_approx(input);
+    simplify_chain_approx(actual);
 
     assert(actual.size() == expected.size());
     for (size_t i = 0; i < actual.size(); ++i) {
@@ -139,7 +140,8 @@ void test_find_contour_chain_approx_simple()
     CoordinateVector<int> expected;
     assert(load_contour_csv("data/test_data/contour_to_signal/find_contour_chain_approx_simple.csv", expected));
 
-    CoordinateVector<int> actual = find_contour_chain_approx_simple(boundary, width, height);
+    CoordinateVector<int> actual;
+    find_contour_chain_approx_simple(boundary, width, height, actual);
 
     assert(actual.size() == expected.size());
     for (size_t i = 0; i < actual.size(); ++i) {
@@ -161,7 +163,9 @@ void test_enclosing_circle_approx()
     float expected_radius;
     assert(load_circle_txt("data/test_data/contour_to_signal/enclosing_circle_approx.txt", expected_center, expected_radius));
 
-    auto [center, radius] = enclosing_circle_approx(smooth_points);
+    Coordinate<float> center;
+    float radius;
+    enclosing_circle_approx(smooth_points, center, radius);
 
     assert(std::abs(center.a - expected_center.a) < 1e-3f && "Center X mismatch!");
     assert(std::abs(center.b - expected_center.b) < 1e-3f && "Center Y mismatch!");
@@ -186,7 +190,8 @@ void test_radial_signal()
     Signal expected;
     assert(load_signal_csv("data/test_data/contour_to_signal/radial_signal.csv", expected));
 
-    Signal actual = radial_signal(smooth_points, center);
+    Signal actual;
+    radial_signal(smooth_points, center, actual);
 
     assert(actual.size() == expected.size());
     for (size_t i = 0; i < actual.size(); ++i) {

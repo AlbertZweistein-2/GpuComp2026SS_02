@@ -12,7 +12,7 @@
 
 // Moore neighbor tracing algorithm to get the vector of contour coordinates
 // Inherently sequential
-CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int width, int height)
+void trace_contour(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int>& result)
 {
 
     // Goes from top-left to bottom-right to find the first nonzero pixel
@@ -37,13 +37,14 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
     if (start.a == -1)
     {
         std::cerr << "No contour points found in the boundary image." << std::endl;
-        return CoordinateVector<int>();
+        result.clear();
+        return;
     }
 
     // the actual contour vector
-    CoordinateVector<int> contour;
+    result.clear();
     // adding the start pixel
-    contour.push_back(start);
+    result.push_back(start);
 
     Coordinate<int> current = start;
     int prev_dir = 0;
@@ -77,16 +78,16 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
                 // if this is the starting point again
                 // and we have found more than ten points
                 // we converge
-                if (next_point == start && contour.size() > 10)
+                if (next_point == start && result.size() > 10)
                 {
-                    return contour;
+                    return;
                 }
 
                 // if it has not been visited before
                 if (visited.insert(next_point).second)
                 {
                     // we add it to the contour vector
-                    contour.push_back(next_point);
+                    result.push_back(next_point);
                     // and start again, but now from the new point
                     current = next_point;
                     prev_dir = (dir_idx + 5) % 8;
@@ -104,19 +105,17 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
             break;
         }
     }
-
-    return contour;
-} 
+}
 
 // ______________________________________________________________________________________________
 
 // Removes unnecessary points along straight lines, we only need the corners
 // Also inherently sequential
-CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour)
+void simplify_chain_approx(CoordinateVector<int>& contour)
 {
     if (contour.size() < 3)
     {
-        return contour;
+        return;
     }
 
     CoordinateVector<int> simplified;
@@ -153,7 +152,7 @@ CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour
         }
     }
     simplified.push_back(contour.back());
-    return simplified;
+    contour = std::move(simplified);
 }
 
 // ______________________________________________________________________________________________
@@ -161,32 +160,30 @@ CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour
 // Just a function to first call the two previous functions
 // for contour tracing and simplification
 // and then swaps the coordinates from (y, x) back to (x, y) just like in the original python code
-CoordinateVector<int> find_contour_chain_approx_simple(const std::vector<uint8_t>& boundary, int width, int height) {
+void find_contour_chain_approx_simple(const std::vector<uint8_t>& boundary, int width, int height, CoordinateVector<int>& result) {
 
     // just calling the two previous functions
-    CoordinateVector<int> contour = trace_contour(boundary, width, height);
-    contour = simplify_chain_approx(contour);
+    trace_contour(boundary, width, height, result);
+    simplify_chain_approx(result);
 
     // swapping coordinates from (y, x) to (x, y)
     // just like in the original python code
-    for (size_t i = 0; i < contour.size(); ++i) {
-        std::swap(contour[i].a, contour[i].b);
+    for (size_t i = 0; i < result.size(); ++i) {
+        std::swap(result[i].a, result[i].b);
     }
-
-    return contour;
 }
 
 // ______________________________________________________________________________________________
 
 // moving average smoothing of the contour points vector
-CoordinateVector<int> smooth_contour(const CoordinateVector<int>& points, int window) {
+void smooth_contour(CoordinateVector<int>& points, int window) {
     // casting size_t to int
     const int n = static_cast<int>(points.size());
 
     // in case the contour is empty
     // or the window size is too small or too large
     if (points.empty() || window <= 1 || window >= n) {
-    return points;
+        return;
     }
 
     // the smoothed contour vector will be the same size as the original 
@@ -215,16 +212,18 @@ CoordinateVector<int> smooth_contour(const CoordinateVector<int>& points, int wi
             static_cast<int>(std::lround(sum_b / divisor))
         };
     }
-    return smoothed;
+    points = std::move(smoothed);
 }
 
 
 // ______________________________________________________________________________________________
 
 // Calculates the center and radius of a circle that encloses the contour points
-std::pair<Coordinate<float>, float> enclosing_circle_approx(const CoordinateVector<int>& points) {
+void enclosing_circle_approx(const CoordinateVector<int>& points, Coordinate<float>& center, float& radius) {
     if (points.empty()) {
-        return std::make_pair(Coordinate<float>{0.0f, 0.0f}, 0.0f);
+        center = {0.0f, 0.0f};
+        radius = 0.0f;
+        return;
     }
 
     int min_x = points[0].a;
@@ -256,15 +255,15 @@ std::pair<Coordinate<float>, float> enclosing_circle_approx(const CoordinateVect
     }
 
     // taking the sqrt to get the actual radius from the max square distance
-    float radius = std::sqrt(max_sq_dist);
-    return std::make_pair(Coordinate<float>{cx, cy}, radius);
+    center = {cx, cy};
+    radius = std::sqrt(max_sq_dist);
 }
 
 // ______________________________________________________________________________________________
 
 // Calculates a vector of distances from the center, one for each contour point
-Signal radial_signal(const CoordinateVector<int>& points, Coordinate<float> center) {
-    Signal signal(points.size());
+void radial_signal(const CoordinateVector<int>& points, Coordinate<float> center, Signal& signal) {
+    signal.resize(points.size());
 
     // again iterating over all contour points
     // and calculating the distance from the center for each contour point
@@ -274,6 +273,4 @@ Signal radial_signal(const CoordinateVector<int>& points, Coordinate<float> cent
         float dy = points[i].b - center.b;
         signal[i] = std::sqrt(dx * dx + dy * dy);
     }
-
-    return signal;
 }

@@ -26,7 +26,7 @@
 // or splitting the image into chunks and separately doing contour tracing
 // all leads to messy reordering and stitching of contours
 // so very complex for very little speedup
-CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int width, int height)
+void trace_contour(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
 {
 
     // Goes from top-left to bottom-right to find the first nonzero pixel
@@ -51,13 +51,14 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
     if (start.a == -1)
     {
         std::cerr << "No contour points found in the boundary image." << std::endl;
-        return CoordinateVector<int>();
+        result.clear();
+        return;
     }
 
     // the actual contour vector
-    CoordinateVector<int> contour;
+    result.clear();
     // adding the start pixel
-    contour.push_back(start);
+    result.push_back(start);
 
     Coordinate<int> current = start;
     int prev_dir = 0;
@@ -91,16 +92,16 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
                 // if this is the starting point again
                 // and we have found more than ten points
                 // we converge
-                if (next_point == start && contour.size() > 10)
+                if (next_point == start && result.size() > 10)
                 {
-                    return contour;
+                    return;
                 }
 
                 // if it has not been visited before
                 if (visited.insert(next_point).second)
                 {
                     // we add it to the contour vector
-                    contour.push_back(next_point);
+                    result.push_back(next_point);
                     // and start again, but now from the new point
                     current = next_point;
                     prev_dir = (dir_idx + 5) % 8;
@@ -118,8 +119,6 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
             break;
         }
     }
-
-    return contour;
 }
 
 // ______________________________________________________________________________________________
@@ -128,11 +127,11 @@ CoordinateVector<int> trace_contour(const std::vector<uint8_t> &boundary, int wi
 // Also inherently sequential, therefore not parallelizeable
 // As explained for the last function, also not sensibly parallelizeable
 // very complex for very little speeduo
-CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour)
+void simplify_chain_approx(CoordinateVector<int> &contour)
 {
     if (contour.size() < 3)
     {
-        return contour;
+        return;
     }
 
     CoordinateVector<int> simplified;
@@ -169,7 +168,7 @@ CoordinateVector<int> simplify_chain_approx(const CoordinateVector<int> &contour
         }
     }
     simplified.push_back(contour.back());
-    return simplified;
+    contour = std::move(simplified);
 }
 
 struct swap_and_b
@@ -185,22 +184,20 @@ struct swap_and_b
 // Just a function to first call the two previous functions
 // for contour tracing and simplification
 // and then swaps the coordinates from (y, x) back to (x, y) just like in the original python code
-CoordinateVector<int> find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height)
+void find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
 {
     // just calling the two previous functions
-    CoordinateVector<int> contour = trace_contour(boundary, width, height);
-    contour = simplify_chain_approx(contour);
+    trace_contour(boundary, width, height, result);
+    simplify_chain_approx(result);
 
     // swapping coordinates from (y, x) to (x, y)
     // just like in the original python code
 
     // finally something to parallelize
     // we need to check if the speedup from parallelizing exceeds the overhead
-    thrust::device_vector<Coordinate<int>> d_contour = contour;
+    thrust::device_vector<Coordinate<int>> d_contour = result;
     thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_and_b());
-    thrust::copy(d_contour.begin(), d_contour.end(), contour.begin());
-
-    return contour;
+    thrust::copy(d_contour.begin(), d_contour.end(), result.begin());
 }
 
 // ______________________________________________________________________________________________
@@ -265,14 +262,14 @@ __global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<
 }
 
 // moving average smoothing of the contour points vector
-CoordinateVector<int> smooth_contour(const CoordinateVector<int> &points, int window)
+void smooth_contour(CoordinateVector<int> &points, int window)
 {
     // in case the contour is empty
     // or the window size is too small or too large
     const int n = static_cast<int>(points.size());
     if (points.empty() || window <= 1 || window >= n)
     {
-        return points;
+        return;
     }
 
     // the smoothed contour vector will be the same size as the original
@@ -296,10 +293,7 @@ CoordinateVector<int> smooth_contour(const CoordinateVector<int> &points, int wi
         half_window, n);
 
     // copying the result back from device to host
-    CoordinateVector<int> smoothed(n);
-    thrust::copy(d_smoothed.begin(), d_smoothed.end(), smoothed.begin());
-
-    return smoothed;
+    thrust::copy(d_smoothed.begin(), d_smoothed.end(), points.begin());
 }
 
 // ______________________________________________________________________________________________
@@ -341,11 +335,13 @@ struct square_distance
 };
 
 // Calculates the center and radius of a circle that encloses the contour points
-std::pair<Coordinate<float>, float> enclosing_circle_approx(const CoordinateVector<int> &points)
+void enclosing_circle_approx(const CoordinateVector<int> &points, Coordinate<float> &center, float &radius)
 {
     if (points.empty())
     {
-        return std::make_pair(Coordinate<float>{0.0f, 0.0f}, 0.0f);
+        center = {0.0f, 0.0f};
+        radius = 0.0f;
+        return;
     }
 
     // copying the contour points to the device
@@ -377,8 +373,8 @@ std::pair<Coordinate<float>, float> enclosing_circle_approx(const CoordinateVect
 
     // taking the sqrt to get the actual radius from the max square distance
     // using cuda sqrtf for consistency
-    float radius = sqrtf(max_sq_dist);
-    return std::make_pair(Coordinate<float>{cx, cy}, radius);
+    center = {cx, cy};
+    radius = sqrtf(max_sq_dist);
 }
 
 // ______________________________________________________________________________________________
@@ -401,9 +397,9 @@ __global__ void radial_signal_kernel(const Coordinate<int> *points, float *signa
 }
 
 // Calculates a vector of distances from the center, one for each contour point
-Signal radial_signal(const CoordinateVector<int> &points, Coordinate<float> center)
+void radial_signal(const CoordinateVector<int> &points, Coordinate<float> center, Signal &signal)
 {
-    Signal signal(points.size());
+    signal.resize(points.size());
     // using thrust to create device vectors
     // so we do not need to manually free the memory afterwards, thrust takes care of that
     thrust::device_vector<float> d_signal(points.size());
@@ -419,5 +415,4 @@ Signal radial_signal(const CoordinateVector<int> &points, Coordinate<float> cent
 
     // copying the result back from device to host
     thrust::copy(d_signal.begin(), d_signal.end(), signal.begin());
-    return signal;
 }
