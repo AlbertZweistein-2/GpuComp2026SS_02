@@ -57,9 +57,6 @@ struct PuzzlePiece {
 };
 
 struct PipelineResult {
-    ImageU8 cleaned;
-    ImageU8 boundary;
-
     std::vector<PuzzlePiece> pieces;
     PipelineTimings timings;
 };

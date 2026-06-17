@@ -83,11 +83,12 @@ PipelineResult run(const PipelineOptions& options)
     int width = 0;
     int height = 0;
     uint8_t* rgb = load_rgb_image(input_image_path, width, height);
+    ImageU8 cleaned;
 
     // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[pipeline] preprocessing");
     time_stage(result.timings.preprocessing, [&]() {
-        result.cleaned = preprocess(
+        cleaned = preprocess(
             rgb,
             width,
             height,
@@ -102,7 +103,7 @@ PipelineResult run(const PipelineOptions& options)
     // STEP 3: Label connected components and collect piece regions
     debug_print("[pipeline] connected components");
     time_stage(result.timings.connected_components, [&]() {
-        auto components = connected_components(result.cleaned, options.min_region_area);
+        auto components = connected_components(cleaned, options.min_region_area);
         labels = std::move(components.first);
         regions = std::move(components.second);
     });
@@ -199,17 +200,6 @@ PipelineResult run(const PipelineOptions& options)
             piece.class_label = puzzle_lookup.getClassLabel(edge_label_string);
         });
 
-        if (regions.size() == 1) {
-            result.boundary.width = labels.width;
-            result.boundary.height = labels.height;
-            result.boundary.data.assign(static_cast<size_t>(labels.width) * labels.height, 0);
-            for (int y = 0; y < piece_boundary.height; ++y) {
-                for (int x = 0; x < piece_boundary.width; ++x) {
-                    result.boundary.data[(y + boundary_offset.b) * labels.width + (x + boundary_offset.a)] =
-                        piece_boundary.data[y * piece_boundary.width + x];
-                }
-            }
-        }
         result.pieces.push_back(std::move(piece));
     }
 

@@ -2,26 +2,17 @@
  * CUDA C++ — Step 1: Image Preprocessing
  * TU Wien — GPU Architecture & Computing SS2026
  *
- * Full GPU pipeline implementation:
+ * GPU preprocessing implementation:
  *   1. RGB -> Grayscale      (ITU-R BT.601)
  *   2. Normalization         (Min/Max -> [0, 255])
  *   3. Gaussian Blur         (2-D convolution with separable kernel)
  *   4. Histogram + Otsu      (automatic threshold computation)
  *   5. Binarization
- *
- * Compile:
- *   nvcc -O2 -std=c++17 -I. -o preprocessing_cuda preprocessing.cu
- *
- * Usage:
- *   ./preprocessing_cuda                        # loads ../../data/single.JPG
- *   ./preprocessing_cuda ../../data/1_p1.jpg   # any image
  */
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
-#include <cstring>
-#include <iostream>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -32,14 +23,9 @@
 #include <thrust/execution_policy.h>
 #include <thrust/extrema.h>
 
-// stb_image - single-header image loader (place stb_image.h in the same folder)
-#define STB_IMAGE_IMPLEMENTATION
-#include "../../include/stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "../../include/stb_image_write.h"
+#include "parallel/cleaning.cuh"
+#include "parallel/preprocessing.hpp"
 
-#include "../../include/serial/preprocessing.hpp"
-#include "../../include/helpers.hpp"
 // ─── Constants (same as the CUDA implementation) ─────────────────────────────
 static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS  = 256;
@@ -317,102 +303,65 @@ __global__ void binarize_kernel(
 
 
 // -----------------------------------------------------------------------------
-// FOR CUDA Impl.
-// STEP 6 — Morphological Filter
-// -----------------------------------------------------------------------------
-__global__ void morphology_kernel(
-    const uint8_t* in,
-    uint8_t* out,
-    int width,
-    int height,
-    int radius,
-    bool dilate)
-{
-    int num_pixels = width * height;
-    int pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for (int idx = pixel_idx; idx < num_pixels; idx += stride) {
-        int y = idx / width;
-        int x = idx % width;
-
-        uint8_t result = dilate ? 0u : 255u;
-
-        for (int dy = -radius; dy <= radius; ++dy) {
-            for (int dx = -radius; dx <= radius; ++dx) {
-                int sy = y + dy;
-                int sx = x + dx;
-
-                sy = max(0, min(sy, height - 1));
-                sx = max(0, min(sx, width - 1));
-
-                uint8_t value = in[sy * width + sx];
-
-                if (dilate) {
-                    if (value > result)
-                        result = value;
-                } else {
-                    if (value < result)
-                        result = value;
-                }
-            }
-        }
-
-        out[idx] = result;
-    }
-}
-
-
-// -----------------------------------------------------------------------------
-// Main pipeline — combines all steps
+// Preprocessing stages only. Cleaning is in parallel/cleaning.cuh.
 // -----------------------------------------------------------------------------
 
-void preprocess_cuda(
+void preprocess_cuda_device(
         const uint8_t* rgb,
+        uint8_t* d_cleaned,
         int width,
         int height,
         int ksize,
         float sigma,
-        ImageU8& result)
+        int morphology_kernel_width,
+        int morphology_kernel_height,
+        int morphology_iterations)
 {
     if (width <= 0 || height <= 0)
         throw std::invalid_argument("width and height must be > 0");
 
     if (ksize < 1 || ksize % 2 == 0 || ksize > MAX_KERNEL)
         throw std::invalid_argument("ksize must be odd and <= 15");
+    if (morphology_kernel_width < 1 || morphology_kernel_height < 1)
+        throw std::invalid_argument("morphology kernel dimensions must be > 0");
 
-    result.width = width;
-    result.height = height;
+    const int num_pixels = width * height;
 
-    int num_pixels = width * height;
-
-    size_t rgb_bytes = static_cast<size_t>(num_pixels) * 3 * sizeof(uint8_t);
-    size_t float_bytes = static_cast<size_t>(num_pixels) * sizeof(float);
-    size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
-
-    result.data.resize(static_cast<size_t>(num_pixels));
+    const size_t rgb_bytes = static_cast<size_t>(num_pixels) * 3 * sizeof(uint8_t);
+    const size_t float_bytes = static_cast<size_t>(num_pixels) * sizeof(float);
+    const size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
 
     std::vector<float> kernel = make_gaussian_kernel(ksize, sigma);
+    std::vector<uint8_t> morphology_kernel(
+        static_cast<size_t>(morphology_kernel_width) * morphology_kernel_height,
+        1);
 
     uint8_t* d_rgb = nullptr;
+    uint8_t* d_binary = nullptr;
+    uint8_t* d_temp = nullptr;
+    uint8_t* d_morphology_kernel = nullptr;
     float* d_gray = nullptr;
     float* d_blurred = nullptr;
-    uint8_t* d_binary = nullptr;
     uint32_t* d_hist = nullptr;
     float* d_threshold = nullptr;
     float* d_minmax = nullptr;
-    uint8_t* d_morph = nullptr;
 
     CUDA_CHECK(cudaMalloc(&d_rgb, rgb_bytes));
+    CUDA_CHECK(cudaMalloc(&d_binary, binary_bytes));
+    CUDA_CHECK(cudaMalloc(&d_temp, binary_bytes));
+    CUDA_CHECK(cudaMalloc(&d_morphology_kernel, morphology_kernel.size() * sizeof(uint8_t)));
     CUDA_CHECK(cudaMalloc(&d_gray, float_bytes));
     CUDA_CHECK(cudaMalloc(&d_blurred, float_bytes));
-    CUDA_CHECK(cudaMalloc(&d_binary, binary_bytes));
     CUDA_CHECK(cudaMalloc(&d_hist, HIST_BINS * sizeof(uint32_t)));
     CUDA_CHECK(cudaMalloc(&d_threshold, sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_minmax, 2 * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_morph, binary_bytes));
 
     CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgb_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(
+        d_morphology_kernel,
+        morphology_kernel.data(),
+        morphology_kernel.size() * sizeof(uint8_t),
+        cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaMemcpyToSymbol(
         d_gaussian_kernel,
@@ -449,12 +398,6 @@ void preprocess_cuda(
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
-    cudaEvent_t start, stop;
-    CUDA_CHECK(cudaEventCreate(&start));
-    CUDA_CHECK(cudaEventCreate(&stop));
-
-    CUDA_CHECK(cudaEventRecord(start));
-
     gaussian_blur_kernel<<<grid1d, block1d>>>(
         d_gray,
         d_blurred,
@@ -462,17 +405,6 @@ void preprocess_cuda(
         height,
         ksize);
     CUDA_CHECK(cudaGetLastError());
-
-    CUDA_CHECK(cudaEventRecord(stop));
-    CUDA_CHECK(cudaEventSynchronize(stop));
-
-    float milliseconds = 0.0f;
-    CUDA_CHECK(cudaEventElapsedTime(&milliseconds, start, stop));
-
-    std::cout << "Gaussian Blur Time: " << milliseconds << " ms\n";
-
-    CUDA_CHECK(cudaEventDestroy(start));
-    CUDA_CHECK(cudaEventDestroy(stop));
 
     CUDA_CHECK(cudaMemset(d_hist, 0, HIST_BINS * sizeof(uint32_t)));
 
@@ -497,102 +429,70 @@ void preprocess_cuda(
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
-    int morph_radius = 2;
-
-    morphology_kernel<<<grid1d, block1d>>>(
+    morphological_open_cuda_device(
         d_binary,
-        d_morph,
+        d_morphology_kernel,
+        d_temp,
+        d_cleaned,
         width,
         height,
-        morph_radius,
-        false);
-    CUDA_CHECK(cudaGetLastError());
-
-    morphology_kernel<<<grid1d, block1d>>>(
-        d_morph,
-        d_binary,
-        width,
-        height,
-        morph_radius,
-        true);
-    CUDA_CHECK(cudaGetLastError());
-
-    CUDA_CHECK(cudaMemcpy(
-        result.data.data(),
-        d_binary,
-        binary_bytes,
-        cudaMemcpyDeviceToHost));
+        morphology_kernel_width,
+        morphology_kernel_height,
+        morphology_iterations);
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     CUDA_CHECK(cudaFree(d_rgb));
+    CUDA_CHECK(cudaFree(d_binary));
+    CUDA_CHECK(cudaFree(d_temp));
+    CUDA_CHECK(cudaFree(d_morphology_kernel));
     CUDA_CHECK(cudaFree(d_gray));
     CUDA_CHECK(cudaFree(d_blurred));
-    CUDA_CHECK(cudaFree(d_binary));
     CUDA_CHECK(cudaFree(d_hist));
     CUDA_CHECK(cudaFree(d_threshold));
     CUDA_CHECK(cudaFree(d_minmax));
-    CUDA_CHECK(cudaFree(d_morph));
 }
 
-
-
-
-
-//TEST for Debugging
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// main
-// ─────────────────────────────────────────────────────────────────────────────
-int main(int argc, char** argv)
+void preprocess_cuda(
+        const uint8_t* rgb,
+        int width,
+        int height,
+        int ksize,
+        float sigma,
+        int morphology_kernel_width,
+        int morphology_kernel_height,
+        int morphology_iterations,
+        ImageU8& result)
 {
-    const char* input_path  = (argc > 1) ? argv[1] : "../../data/single.JPG";
-    // Build output path by prefixing the input filename with "binary_" and using .png
-    std::string input_str = input_path;
-    std::string output_path;
-    {
-        size_t pos = input_str.find_last_of("/\\");
-        std::string dir = (pos == std::string::npos) ? std::string() : input_str.substr(0, pos + 1);
-        std::string filename = (pos == std::string::npos) ? input_str : input_str.substr(pos + 1);
-        size_t dot = filename.find_last_of('.');
-        std::string base = (dot == std::string::npos) ? filename : filename.substr(0, dot);
-        output_path = dir + "binary_" + base + ".png";
-    }
+    if (width <= 0 || height <= 0)
+        throw std::invalid_argument("width and height must be > 0");
 
-    // Load image
-    int W, H, channels;
-    uint8_t* rgb = stbi_load(input_path, &W, &H, &channels, 3);
-    if (!rgb) {
-        std::cerr << "Error: Could not load image: " << input_path
-                  << "\n" << stbi_failure_reason() << "\n";
-        return EXIT_FAILURE;
-    }
-    std::cout << "Loaded image: " << input_path
-              << "  (" << W << " x " << H << ")\n";
+    result.width = width;
+    result.height = height;
 
+    const int num_pixels = width * height;
+    const size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
 
+    result.data.resize(static_cast<size_t>(num_pixels));
 
-    
-    // CUDA preprocessing
-    auto res = preprocess_cuda(rgb, W, H, 15, 1.0f);
+    uint8_t* d_cleaned = nullptr;
 
-    stbi_image_free(rgb);
+    CUDA_CHECK(cudaMalloc(&d_cleaned, binary_bytes));
+    preprocess_cuda_device(
+        rgb,
+        d_cleaned,
+        width,
+        height,
+        ksize,
+        sigma,
+        morphology_kernel_width,
+        morphology_kernel_height,
+        morphology_iterations);
 
-    // Statistik
-    int white = 0;
-    for (uint8_t v : res.data) white += (v == 255);
-    int total = W * H;
+    CUDA_CHECK(cudaMemcpy(
+        result.data.data(),
+        d_cleaned,
+        binary_bytes,
+        cudaMemcpyDeviceToHost));
 
-    std::cout << "\n-- Result ---------------------------------\n";
-    std::cout << "Foreground        : " << white
-              << " pixels  (" << 100.f * white / total << " %)\n";
-    std::cout << "Background        : " << (total - white)
-              << " pixels  (" << 100.f * (total - white) / total << " %)\n";
-
-    // Save binary image
-    if (stbi_write_png(output_path.c_str(), W, H, 1, res.data.data(), W))
-        std::cout << "\nSaved: " << output_path << "\n";
-    else
-        std::cerr << "Error saving: " << output_path << "\n";
-
-    return EXIT_SUCCESS;
+    CUDA_CHECK(cudaFree(d_cleaned));
 }

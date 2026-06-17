@@ -14,11 +14,9 @@ option(PIPELINE_DEBUG_OUTPUT "Compile serial pipeline debug logging and summary 
 option(PIPELINE_SUB_TIMINGS "Measure and print serial pipeline sub-stage timings when debug output is enabled" ON)
 option(PIPELINE_ENABLE_CUDA "Enable optional CUDA pipeline backends" OFF)
 set(PIPELINE_OPTIMIZATION_LEVEL "-O3" CACHE STRING "Optimization flag for serial C++ Release builds, e.g. -O2 or -O3")
-set(PIPELINE_CUDA_SOURCES "" CACHE STRING "Semicolon-separated CUDA sources to build when PIPELINE_ENABLE_CUDA is ON")
+set(PIPELINE_CUDA_OPTIMIZATION_LEVEL "${PIPELINE_OPTIMIZATION_LEVEL}" CACHE STRING "Optimization flag for CUDA Release builds, e.g. -O2 or -O3")
 
-set(SERIAL_PIPELINE_MODULE_SOURCES
-    src/serial/preprocessing.cpp
-    src/serial/cleaning.cpp
+set(PIPELINE_COMMON_MODULE_SOURCES
     src/serial/boundary_extraction.cpp
     src/serial/component_labeling.cpp
     src/serial/contour_to_signal.cpp
@@ -27,13 +25,34 @@ set(SERIAL_PIPELINE_MODULE_SOURCES
     src/serial/visualization.cpp
 )
 
+add_library(pipeline_common_modules
+    ${PIPELINE_COMMON_MODULE_SOURCES}
+)
+
+target_include_directories(pipeline_common_modules
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_compile_options(pipeline_common_modules
+    PRIVATE
+        $<$<CONFIG:Release>:${PIPELINE_OPTIMIZATION_LEVEL}>
+        $<$<CONFIG:RelWithDebInfo>:${PIPELINE_OPTIMIZATION_LEVEL}>
+)
+
 add_library(serial_pipeline_modules
-    ${SERIAL_PIPELINE_MODULE_SOURCES}
+    src/serial/preprocessing.cpp
+    src/serial/cleaning.cpp
 )
 
 target_include_directories(serial_pipeline_modules
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(serial_pipeline_modules
+    PUBLIC
+        pipeline_common_modules
 )
 
 target_compile_options(serial_pipeline_modules
@@ -102,24 +121,64 @@ endforeach()
 if(PIPELINE_ENABLE_CUDA)
     enable_language(CUDA)
 
-    if(PIPELINE_CUDA_SOURCES)
-        add_library(cuda_pipeline_modules
-            ${PIPELINE_CUDA_SOURCES}
-        )
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-        target_include_directories(cuda_pipeline_modules
-            PUBLIC
-                ${CMAKE_CURRENT_SOURCE_DIR}/include
-        )
+    add_library(cuda_pipeline_modules
+        src/parallel/boundary_extraction.cu
+        src/parallel/cleaning.cu
+        src/parallel/component_labeling.cu
+        src/parallel/preprocessing.cu
+    )
 
-        target_link_libraries(pipeline_core
-            PUBLIC
-                cuda_pipeline_modules
-        )
+    target_include_directories(cuda_pipeline_modules
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
 
-        target_link_libraries(pipeline
+    target_compile_options(cuda_pipeline_modules
+        PRIVATE
+            $<$<CONFIG:Release>:${PIPELINE_CUDA_OPTIMIZATION_LEVEL}>
+            $<$<CONFIG:RelWithDebInfo>:${PIPELINE_CUDA_OPTIMIZATION_LEVEL}>
+    )
+
+    add_executable(pipeline_cuda
+        src/parallel/pipeline.cu
+    )
+
+    target_compile_definitions(pipeline_cuda
+        PRIVATE
+            CUDA_PIPELINE_BUILD_STANDALONE
+    )
+
+    target_include_directories(pipeline_cuda
+        PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(pipeline_cuda
+        PRIVATE
+            cuda_pipeline_modules
+            pipeline_common_modules
+    )
+
+    target_compile_options(pipeline_cuda
+        PRIVATE
+            $<$<CONFIG:Release>:${PIPELINE_CUDA_OPTIMIZATION_LEVEL}>
+            $<$<CONFIG:RelWithDebInfo>:${PIPELINE_CUDA_OPTIMIZATION_LEVEL}>
+    )
+
+    if(PIPELINE_DEBUG_OUTPUT)
+        target_compile_definitions(pipeline_cuda
             PRIVATE
-                cuda_pipeline_modules
+                DEBUG_LEVEL=1
+        )
+    endif()
+
+    if(PIPELINE_DEBUG_OUTPUT AND PIPELINE_SUB_TIMINGS)
+        target_compile_definitions(pipeline_cuda
+            PRIVATE
+                SUB_TIMINGS=1
         )
     endif()
 endif()
