@@ -21,8 +21,15 @@
 inline void set_pixel(std::vector<uint8_t>& img, int width, int height,
                       int x, int y, uint8_t r, uint8_t g, uint8_t b)
 {
-    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    // if pixel is out of bounds, do nothing
+    if (x < 0 || x >= width || y < 0 || y >= height)
+    {
+        return;
+    }
+    // image is stored as flat row-major array
+    // with RGB triplets
     size_t idx = static_cast<size_t>((y * width + x) * 3);
+
     img[idx]     = r;
     img[idx + 1] = g;
     img[idx + 2] = b;
@@ -31,32 +38,80 @@ inline void set_pixel(std::vector<uint8_t>& img, int width, int height,
 // ______________________________________________________________________________________________
 
 // Bresenham's line algorithm
+// draws a line between two points with minimal error
+// inherently serial, but probably not necessary to parallelize for this application
+// GPU overhead would likely dominate
 void draw_line(std::vector<uint8_t>& img, int width, int height,
                int x0, int y0, int x1, int y1,
                uint8_t r, uint8_t g, uint8_t b)
 {
-    int dx =  std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
-    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    // dx and dy are the absolute distances between the two points in x and y
+    // sx and sy are the step directions in x and y
+    int dx = std::abs(x1 - x0);
+    int sx;
+
+    if (x0 < x1)
+    {
+        sx = 1;
+    }
+    else
+    {
+        sx = -1;
+    }
+
+    int dy = -std::abs(y1 - y0);
+    int sy;
+
+    if (y0 < y1)
+    {
+        sy = 1;
+    }
+    else
+    {
+        sy = -1;
+    }
+
+    // err accumulates how far we are from the ideal line
     int err = dx + dy;
+
     while (true)
     {
         set_pixel(img, width, height, x0, y0, r, g, b);
-        if (x0 == x1 && y0 == y1) break;
+
+        // while we have not reached the end point
+        if (x0 == x1 && y0 == y1)
+        {
+            break;
+        }
+
         int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
+
+        // if the error is too large in x or y direction, we step in that direction
+        if (e2 >= dy)
+        {
+            err += dy;
+            x0 += sx;
+        }
+
+        if (e2 <= dx)
+        {
+            err += dx;
+            y0 += sy;
+        }
     }
 }
 
 // ______________________________________________________________________________________________
 
 // draws a rectangle outline with given thickness
+// just using four lines
 void draw_rect(std::vector<uint8_t>& img, int width, int height,
                int x, int y, int w, int h,
                uint8_t r, uint8_t g, uint8_t b, int thickness = 2)
 {
     for (int t = 0; t < thickness; ++t)
     {
+        // top, right, bottom, left
         draw_line(img, width, height, x+t,   y+t,   x+w-t, y+t,   r, g, b);
         draw_line(img, width, height, x+w-t, y+t,   x+w-t, y+h-t, r, g, b);
         draw_line(img, width, height, x+w-t, y+h-t, x+t,   y+h-t, r, g, b);
@@ -95,30 +150,40 @@ void draw_text(std::vector<uint8_t>& img, int img_width, int img_height,
     // scale factor for desired pixel height
     float scale = stbtt_ScaleForPixelHeight(&font, font_size);
 
-    // baseline position
+    // baseline is where the characters sit
+    // and ascent is the distance from baseline to top of tallest character
     int ascent, descent, line_gap;
     stbtt_GetFontVMetrics(&font, &ascent, &descent, &line_gap);
     int baseline = y + static_cast<int>(ascent * scale);
 
-    // rendering each character
+    // rendering each character sequentially
+    // cursor_x is the current x position for the next character
     int cursor_x = x;
     for (char c : text)
     {
+        // stb_truetype turns the character into a bitmap
         int bw, bh, bx, by;
         unsigned char* bitmap = stbtt_GetCodepointBitmap(
             &font, 0, scale, c, &bw, &bh, &bx, &by);
 
-        // blitting the glyph bitmap into the image with alpha blending
         for (int row = 0; row < bh; ++row)
         {
             for (int col = 0; col < bw; ++col)
             {
+                // optional alpha blending with the background
                 float alpha = bitmap[row * bw + col] / 255.0f;
-                if (alpha == 0.0f) continue;
+                if (alpha == 0.0f)
+                {
+                    continue;
+                }
 
+                // px and py are the absolute pixel coordinates in the image
                 int px = cursor_x + bx + col;
                 int py = baseline + by + row;
-                if (px < 0 || px >= img_width || py < 0 || py >= img_height) continue;
+                if (px < 0 || px >= img_width || py < 0 || py >= img_height)
+                {
+                    continue;
+                }
 
                 size_t idx = static_cast<size_t>((py * img_width + px) * 3);
                 img[idx]     = static_cast<uint8_t>(alpha * r + (1.0f - alpha) * img[idx]);
@@ -129,7 +194,8 @@ void draw_text(std::vector<uint8_t>& img, int img_width, int img_height,
 
         stbtt_FreeBitmap(bitmap, nullptr);
 
-        // advancing cursor to next character
+        // advance is the x distance to the next character
+        // moving horizontally
         int advance, lsb;
         stbtt_GetCodepointHMetrics(&font, c, &advance, &lsb);
         cursor_x += static_cast<int>(advance * scale);
@@ -147,7 +213,7 @@ void draw_piece_overlays(
 {
     const float label_font_size = 40.0f;
 
-    // working on a copy so we don't modify the input
+    // working on a copy so we dont modify the original image
     const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
     std::vector<uint8_t> img(rgb_data, rgb_data + pixel_count);
 
@@ -157,9 +223,11 @@ void draw_piece_overlays(
         const CoordinateVector<int>& contour = piece.contour;
 
         // drawing the contour in red
-        // contour points are (x, y) after the coordinate swap in find_contour_chain_approx_simple
+        // contour points are (x, y) again after the coordinate swap in find_contour_chain_approx_simple
         for (size_t i = 0; i < contour.size(); ++i)
         {
+            // connecting consecutive points in the contour with lines
+            // wrapping around to close the contour
             size_t next = (i + 1) % contour.size();
             draw_line(img, width, height,
                       contour[i].a,    contour[i].b,
@@ -172,11 +240,18 @@ void draw_piece_overlays(
                   region.x, region.y, region.width, region.height,
                   144, 238, 144, 2);
 
-        // drawing the label text in blue above the bounding box
-        const std::string piece_label = piece.class_label.empty()
-            ? edges_to_string(piece.edge_labels)
-            : piece.class_label;
+        // drawing the label text in white above the bounding box
+        std::string piece_label;
+        if (piece.class_label.empty())
+        {
+            piece_label = edges_to_string(piece.edge_labels);
+        }
+        else
+        {
+            piece_label = piece.class_label;
+        }
         std::string text = "Piece " + std::to_string(region.label) + " ; Class " + piece_label;
+        // positioning the text above the bounding box with some padding
         int text_y = std::max(0, region.y - static_cast<int>(label_font_size + 8.0f));
         draw_text(img, width, height, text, region.x, text_y, label_font_size, 255, 255, 255);
     }
