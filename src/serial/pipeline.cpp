@@ -6,12 +6,9 @@
 #define SUB_TIMINGS 0
 #endif
 
-#ifndef PIPELINE_WRITE_OUTPUT_IMAGE
-#define PIPELINE_WRITE_OUTPUT_IMAGE 0
-#endif
-
 #include "serial/pipeline.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -26,9 +23,7 @@
 #include "serial/contour_to_signal.hpp"
 #include "serial/preprocessing.hpp"
 #include "serial/signal_analysis.hpp"
-#if PIPELINE_WRITE_OUTPUT_IMAGE
 #include "serial/visualization.hpp"
-#endif
 #include "stb_image.h"
 
 namespace fs = std::filesystem;
@@ -102,10 +97,6 @@ PipelineResult run(const PipelineOptions& options)
             options.morphology_kernel_height,
             options.morphology_iterations);
     });
-#if !PIPELINE_WRITE_OUTPUT_IMAGE
-    stbi_image_free(rgb);
-#endif
-
     ImageI32 labels;
     std::vector<Region> regions;
     // STEP 3: Label connected components and collect piece regions
@@ -222,14 +213,14 @@ PipelineResult run(const PipelineOptions& options)
         result.pieces.push_back(std::move(piece));
     }
 
-#if PIPELINE_WRITE_OUTPUT_IMAGE
     // STEP 12: Draw final contour and bounding-box overlay image
-    const fs::path output_dir = project_path(options.output_dir);
-    fs::create_directories(output_dir);
-    const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.png");
-    draw_piece_overlays(rgb, width, height, result.pieces, overlay_path.string());
+    time_stage(result.timings.visualization, [&]() {
+        const fs::path output_dir = project_path(options.output_dir);
+        fs::create_directories(output_dir);
+        const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.png");
+        draw_piece_overlays(rgb, width, height, result.pieces, overlay_path.string());
+    });
     stbi_image_free(rgb);
-#endif
 
     result.timings.total_seconds = total_timer.get();
 
@@ -281,16 +272,28 @@ void print_summary(const PipelineOptions& options, const PipelineResult& results
     std::cout << "\n-- Timings -------------------------------\n";
     print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1
-    print_timing("Preprocessing", results.timings.preprocessing);
-    print_timing("Connected components", results.timings.connected_components);
-    print_timing("Boundary extraction", results.timings.boundary_extraction);
-    print_timing("Contour extraction", results.timings.contour_extraction);
-    print_timing("Contour smoothing", results.timings.contour_smoothing);
-    print_timing("Enclosing circle", results.timings.enclosing_circle);
-    print_timing("Radial signal", results.timings.radial_signal);
-    print_timing("Signal smoothing", results.timings.signal_smoothing);
-    print_timing("Peak detection", results.timings.peak_detection);
-    print_timing("Edge classification", results.timings.edge_classification);
+    std::vector<std::pair<std::string_view, double>> stage_timings = {
+        {"Preprocessing", results.timings.preprocessing},
+        {"Connected components", results.timings.connected_components},
+        {"Boundary extraction", results.timings.boundary_extraction},
+        {"Contour extraction", results.timings.contour_extraction},
+        {"Contour smoothing", results.timings.contour_smoothing},
+        {"Enclosing circle", results.timings.enclosing_circle},
+        {"Radial signal", results.timings.radial_signal},
+        {"Signal smoothing", results.timings.signal_smoothing},
+        {"Peak detection", results.timings.peak_detection},
+        {"Edge classification", results.timings.edge_classification},
+        {"Visualization", results.timings.visualization},
+    };
+
+    std::sort(stage_timings.begin(), stage_timings.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  return lhs.second > rhs.second;
+              });
+
+    for (const auto& [label, seconds] : stage_timings) {
+        print_timing(label.data(), seconds);
+    }
 #else
     std::cout << "  Sub timings disabled; compile with SUB_TIMINGS >= 1 to measure stages.\n";
 #endif

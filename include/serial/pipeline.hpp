@@ -20,6 +20,7 @@ struct PipelineTimings {
     double signal_smoothing = 0.0;
     double peak_detection = 0.0;
     double edge_classification = 0.0;
+    double visualization = 0.0;
     double total_seconds = 0.0;
 };
 
