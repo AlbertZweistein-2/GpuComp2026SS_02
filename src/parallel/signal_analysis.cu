@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <string>
 #include <vector>
 
 #include <thrust/copy.h>
@@ -296,3 +297,96 @@ EdgeLabels classify_edges(
 }
 
 } // namespace parallel_signal
+
+char edge_char(EdgeType e) {
+    switch (e) {
+        case EdgeType::Straight: return 'L';
+        case EdgeType::Knob:     return 'V';
+        case EdgeType::Hole:     return 'C';
+    }
+    return '?';
+}
+
+std::string edges_to_string(const EdgeLabels& labels) {
+    std::string s;
+    for (auto e : labels) s += edge_char(e);
+    return s;
+}
+
+int PuzzleLookupTable::charToDigit(char c) const {
+    if (c == 'L') return 0;
+    if (c == 'V') return 1;
+    if (c == 'C') return 2;
+    return 0;
+}
+
+int PuzzleLookupTable::getBase3Index(const std::string& s) const {
+    return charToDigit(s[0]) * 27 +
+           charToDigit(s[1]) * 9 +
+           charToDigit(s[2]) * 3 +
+           charToDigit(s[3]);
+}
+
+std::string PuzzleLookupTable::rotate(const std::string& s) const {
+    return s.substr(1) + s[0];
+}
+
+std::string PuzzleLookupTable::getCategory(const std::string& s) const {
+    int l_count = std::count(s.begin(), s.end(), 'L');
+    if (l_count == 0) return "I";
+    if (l_count == 1) return "E";
+    if (l_count == 2) return "C";
+    if (l_count == 3) return "T";
+    if (l_count == 4) return "S";
+    return "U";
+}
+
+PuzzleLookupTable::PuzzleLookupTable() {
+    table.fill("");
+
+    int count_I = 0, count_E = 0, count_C = 0, count_T = 0, count_S = 0;
+    const char edges[] = {'L', 'V', 'C'};
+
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            for (int k = 0; k < 3; ++k) {
+                for (int l = 0; l < 3; ++l) {
+                    std::string s = {edges[i], edges[j], edges[k], edges[l]};
+                    int idx = getBase3Index(s);
+
+                    if (table[idx].empty()) {
+                        std::string r1 = rotate(s);
+                        std::string r2 = rotate(r1);
+                        std::string r3 = rotate(r2);
+
+                        std::string canonical = s;
+                        if (r1 < canonical) canonical = r1;
+                        if (r2 < canonical) canonical = r2;
+                        if (r3 < canonical) canonical = r3;
+
+                        std::string cat = getCategory(canonical);
+                        int class_id = 0;
+
+                        if      (cat == "I") class_id = count_I++;
+                        else if (cat == "E") class_id = count_E++;
+                        else if (cat == "C") class_id = count_C++;
+                        else if (cat == "T") class_id = count_T++;
+                        else if (cat == "S") class_id = count_S++;
+
+                        std::string final_label = cat + "_" + std::to_string(class_id) + ": " + canonical;
+
+                        table[getBase3Index(s)]  = final_label;
+                        table[getBase3Index(r1)] = final_label;
+                        table[getBase3Index(r2)] = final_label;
+                        table[getBase3Index(r3)] = final_label;
+                    }
+                }
+            }
+        }
+    }
+}
+
+std::string PuzzleLookupTable::getClassLabel(const std::string& edges) const {
+    if (edges.length() != 4) return "Invalid";
+    return table[getBase3Index(edges)];
+}
