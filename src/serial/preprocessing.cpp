@@ -207,7 +207,7 @@ static void binarize(
 // Main pipeline — combines all steps
 // -----------------------------------------------------------------------------
 
-ImageU8 preprocess(
+void preprocess(
         const uint8_t* rgb,
         int width,
         int height,
@@ -215,9 +215,9 @@ ImageU8 preprocess(
         float sigma,
         int morphology_kernel_width,
         int morphology_kernel_height,
-        int morphology_iterations)
+        int morphology_iterations,
+        ImageU8& result)
 {
-    ImageU8 result;
     result.width = width;
     result.height = height;
 
@@ -252,6 +252,4 @@ ImageU8 preprocess(
 
     const ImageU8 morphology_kernel = make_kernel(morphology_kernel_width, morphology_kernel_height);
     morphological_open(binary_image, morphology_kernel, result, morphology_iterations);
-
-    return result;
 }

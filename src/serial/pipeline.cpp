@@ -88,7 +88,7 @@ PipelineResult run(const PipelineOptions& options)
     // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[pipeline] preprocessing");
     time_stage(result.timings.preprocessing, [&]() {
-        cleaned = preprocess(
+        preprocess(
             rgb,
             width,
             height,
@@ -96,7 +96,8 @@ PipelineResult run(const PipelineOptions& options)
             options.gaussian_sigma,
             options.morphology_kernel_width,
             options.morphology_kernel_height,
-            options.morphology_iterations);
+            options.morphology_iterations,
+            cleaned);
     });
     ImageI32 labels;
     std::vector<Region> regions;
