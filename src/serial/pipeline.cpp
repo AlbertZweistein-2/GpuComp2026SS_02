@@ -104,9 +104,7 @@ PipelineResult run(const PipelineOptions& options)
     // STEP 3: Label connected components and collect piece regions
     debug_print("[pipeline] connected components");
     time_stage(result.timings.connected_components, [&]() {
-        auto components = connected_components(cleaned, options.min_region_area);
-        labels = std::move(components.first);
-        regions = std::move(components.second);
+        connected_components(cleaned, options.min_region_area, labels, regions);
     });
     debug_print("[pipeline] found " + std::to_string(regions.size()) + " regions");
 

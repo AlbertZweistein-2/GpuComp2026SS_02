@@ -3,19 +3,20 @@
 #include <algorithm>
 #include <queue>
 
-std::pair<ImageI32, std::vector<Region>> connected_components(
+void connected_components(
     const ImageU8& binary,
-    int min_area)
+    int min_area,
+    ImageI32& labels,
+    std::vector<Region>& regions)
 {
     const int height = binary.height;
     const int width = binary.width;
 
-    ImageI32 labels;
     labels.width = width;
     labels.height = height;
     labels.data.resize(static_cast<size_t>(width) * height, 0);
 
-    std::vector<Region> regions;
+    regions.clear();
 
     const std::pair<int, int> neighbors8[] = {
         {-1, -1}, {-1, 0}, {-1, 1},
@@ -89,15 +90,16 @@ std::pair<ImageI32, std::vector<Region>> connected_components(
             }
         }
     }
-    return {labels, regions};
 }
 
-ImageU8 extract_piece_mask(const ImageI32& labels, int target_label)
+void extract_piece_mask(
+    const ImageI32& labels,
+    int target_label,
+    ImageU8& mask)
 {
     // QUESTION:
     // Maybe possible to return only an image of size 
     // of the bounding box of the region, but then we would need to store the offset of the bounding box as well
-    ImageU8 mask;
     mask.width = labels.width;
     mask.height = labels.height;
     mask.data.resize(static_cast<size_t>(labels.width) * labels.height);
@@ -105,6 +107,4 @@ ImageU8 extract_piece_mask(const ImageI32& labels, int target_label)
     for (size_t i = 0; i < labels.data.size(); ++i) {
         mask.data[i] = (labels.data[i] == target_label) ? 255 : 0;
     }
-
-    return mask;
 }
