@@ -27,7 +27,7 @@
 #include "parallel/component_labeling.cuh"
 #include "parallel/contour_to_signal.hpp"
 #include "parallel/preprocessing.hpp"
-#include "serial/signal_analysis.hpp"
+#include "signal_analysis_funcs.cuh"
 #include "serial/visualization.hpp"
 #include "stb_image.h"
 
@@ -278,13 +278,15 @@ PipelineResult run_cuda(const PipelineOptions& options)
         // STEP 9: Smooth radial signal for corner detection
         debug_print("[cuda pipeline] smoothing signal: " + std::to_string(region.label));
         time_stage(result.timings.signal_smoothing, [&]() {
-            smoothed_radial_signal = smooth_signal(raw_radial_signal, options.peak_smoothing_window);
+            smoothed_radial_signal = parallel_signal::smooth_signal(
+                raw_radial_signal,
+                options.peak_smoothing_window);
         });
 
         // STEP 10: Detect the four corner peaks
         debug_print("[cuda pipeline] detecting peaks: " + std::to_string(region.label));
         time_stage(result.timings.peak_detection, [&]() {
-            piece.corner_indices = find_triangular_peaks(
+            piece.corner_indices = parallel_signal::find_triangular_peaks(
                 smoothed_radial_signal,
                 options.peak_min_prominence,
                 options.peak_min_sharpness,
@@ -294,7 +296,7 @@ PipelineResult run_cuda(const PipelineOptions& options)
         // STEP 11: Classify edge types and lookup piece class
         debug_print("[cuda pipeline] classifying edges: " + std::to_string(region.label));
         time_stage(result.timings.edge_classification, [&]() {
-            piece.edge_labels = classify_edges(
+            piece.edge_labels = parallel_signal::classify_edges(
                 raw_radial_signal,
                 piece.corner_indices,
                 options.tol_factor);

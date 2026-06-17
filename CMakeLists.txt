@@ -129,6 +129,7 @@ if(PIPELINE_ENABLE_CUDA)
         src/parallel/cleaning.cu
         src/parallel/component_labeling.cu
         src/parallel/preprocessing.cu
+        src/parallel/signal_analysis_main.cu
     )
 
     target_include_directories(cuda_pipeline_modules
