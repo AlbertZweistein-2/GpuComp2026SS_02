@@ -11,7 +11,6 @@
 
 struct PipelineTimings {
     double preprocessing = 0.0;
-    double cleaning = 0.0;
     double connected_components = 0.0;
     double boundary_extraction = 0.0;
     double contour_extraction = 0.0;
@@ -57,7 +56,6 @@ struct PuzzlePiece {
 };
 
 struct PipelineResult {
-    ImageU8 binary;
     ImageU8 cleaned;
     ImageU8 boundary;
 

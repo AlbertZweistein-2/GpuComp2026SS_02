@@ -22,7 +22,6 @@
 
 #include "helpers.hpp"
 #include "serial/boundary_extraction.hpp"
-#include "serial/cleaning.hpp"
 #include "serial/component_labeling.hpp"
 #include "serial/contour_to_signal.hpp"
 #include "serial/preprocessing.hpp"
@@ -90,30 +89,26 @@ PipelineResult run(const PipelineOptions& options)
     int height = 0;
     uint8_t* rgb = load_rgb_image(input_image_path, width, height);
 
-    // STEP 2: Preprocess RGB image into a binary mask
+    // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[pipeline] preprocessing");
     time_stage(result.timings.preprocessing, [&]() {
-        result.binary = preprocess(
+        result.cleaned = preprocess(
             rgb,
             width,
             height,
             options.gaussian_kernel_size,
-            options.gaussian_sigma);
+            options.gaussian_sigma,
+            options.morphology_kernel_width,
+            options.morphology_kernel_height,
+            options.morphology_iterations);
     });
 #if !PIPELINE_WRITE_OUTPUT_IMAGE
     stbi_image_free(rgb);
 #endif
 
-    // STEP 3: Clean binary mask with morphology
-    debug_print("[pipeline] cleaning");
-    time_stage(result.timings.cleaning, [&]() {
-        ImageU8 kernel = make_kernel(options.morphology_kernel_width, options.morphology_kernel_height);
-        morphological_open(result.binary, kernel, result.cleaned, options.morphology_iterations);
-    });
-
     ImageI32 labels;
     std::vector<Region> regions;
-    // STEP 4: Label connected components and collect piece regions
+    // STEP 3: Label connected components and collect piece regions
     debug_print("[pipeline] connected components");
     time_stage(result.timings.connected_components, [&]() {
         auto components = connected_components(result.cleaned, options.min_region_area);
@@ -139,7 +134,7 @@ PipelineResult run(const PipelineOptions& options)
     for (const auto& region : regions) {
         ImageU8 piece_boundary;
         Coordinate<int> boundary_offset{0, 0};
-        // STEP 5: Extract piece boundary directly from the label image
+        // STEP 4: Extract piece boundary directly from the label image
         debug_print("[pipeline] extracting piece boundary: " + std::to_string(region.label));
         time_stage(result.timings.boundary_extraction, [&]() {
             get_piece_boundary_mask_from_labels(labels, region, piece_boundary, boundary_offset);
@@ -148,13 +143,14 @@ PipelineResult run(const PipelineOptions& options)
         PuzzlePiece piece;
         piece.region = region;
 
-        // STEP 6: Convert boundary mask to contour points
+        // STEP 5: Convert boundary mask to contour points
         debug_print("[pipeline] extracting contour: " + std::to_string(region.label));
         time_stage(result.timings.contour_extraction, [&]() {
-            piece.contour = find_contour_chain_approx_simple(
+            find_contour_chain_approx_simple(
                 piece_boundary.data,
                 piece_boundary.width,
-                piece_boundary.height);
+                piece_boundary.height,
+                piece.contour);
             for (Coordinate<int>& point : piece.contour) {
                 point.a += boundary_offset.a;
                 point.b += boundary_offset.b;
@@ -162,36 +158,36 @@ PipelineResult run(const PipelineOptions& options)
         });
 
         CoordinateVector<int> smoothed_contour;
-        // STEP 7: Smooth contour before signal extraction
+        // STEP 6: Smooth contour before signal extraction
         debug_print("[pipeline] smoothing contour: " + std::to_string(region.label));
         time_stage(result.timings.contour_smoothing, [&]() {
-            smoothed_contour = smooth_contour(piece.contour, options.contour_smoothing_window);
+            smoothed_contour = piece.contour;
+            smooth_contour(smoothed_contour, options.contour_smoothing_window);
         });
 
         Coordinate<float> circle_center{0.0f, 0.0f};
-        // STEP 8: Approximate enclosing circle center
+        // STEP 7: Approximate enclosing circle center
         debug_print("[pipeline] approximating enclosing circle: " + std::to_string(region.label));
         time_stage(result.timings.enclosing_circle, [&]() {
-            auto [center, radius] = enclosing_circle_approx(smoothed_contour);
-            circle_center = center;
-            (void)radius;
+            float radius = 0.0f;
+            enclosing_circle_approx(smoothed_contour, circle_center, radius);
         });
 
         Signal raw_radial_signal;
-        // STEP 9: Convert contour to radial signal
+        // STEP 8: Convert contour to radial signal
         debug_print("[pipeline] calculating radial signal: " + std::to_string(region.label));
         time_stage(result.timings.radial_signal, [&]() {
-            raw_radial_signal = radial_signal(smoothed_contour, circle_center);
+            radial_signal(smoothed_contour, circle_center, raw_radial_signal);
         });
 
         Signal smoothed_radial_signal;
-        // STEP 10: Smooth radial signal for corner detection
+        // STEP 9: Smooth radial signal for corner detection
         debug_print("[pipeline] smoothing signal: " + std::to_string(region.label));
         time_stage(result.timings.signal_smoothing, [&]() {
             smoothed_radial_signal = smooth_signal(raw_radial_signal, options.peak_smoothing_window);
         });
 
-        // STEP 11: Detect the four corner peaks
+        // STEP 10: Detect the four corner peaks
         debug_print("[pipeline] detecting peaks: " + std::to_string(region.label));
         time_stage(result.timings.peak_detection, [&]() {
             piece.corner_indices = find_triangular_peaks(
@@ -201,7 +197,7 @@ PipelineResult run(const PipelineOptions& options)
                 options.peak_min_distance);
         });
 
-        // STEP 12: Classify edge types and lookup piece class
+        // STEP 11: Classify edge types and lookup piece class
         debug_print("[pipeline] classifying edges: " + std::to_string(region.label));
         time_stage(result.timings.edge_classification, [&]() {
             piece.edge_labels = classify_edges(
@@ -227,7 +223,7 @@ PipelineResult run(const PipelineOptions& options)
     }
 
 #if PIPELINE_WRITE_OUTPUT_IMAGE
-    // STEP 14: Draw final contour and bounding-box overlay image
+    // STEP 12: Draw final contour and bounding-box overlay image
     const fs::path output_dir = project_path(options.output_dir);
     fs::create_directories(output_dir);
     const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.png");
@@ -286,7 +282,6 @@ void print_summary(const PipelineOptions& options, const PipelineResult& results
     print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1
     print_timing("Preprocessing", results.timings.preprocessing);
-    print_timing("Cleaning", results.timings.cleaning);
     print_timing("Connected components", results.timings.connected_components);
     print_timing("Boundary extraction", results.timings.boundary_extraction);
     print_timing("Contour extraction", results.timings.contour_extraction);

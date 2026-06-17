@@ -1,5 +1,8 @@
-#include <queue>
 #include <algorithm>
+#include <queue>
+#include <utility>
+#include <vector>
+
 #include "serial/boundary_extraction.hpp"
 
 void get_external_boundary_mask(

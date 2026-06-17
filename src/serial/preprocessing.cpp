@@ -8,32 +8,22 @@
  *   3. Gaussian Blur         (2-D convolution with separable kernel)
  *   4. Histogram + Otsu      (automatic threshold computation)
  *   5. Binarization
- *
- * Compile:
- *   g++ -O2 -std=c++17 -o preprocessing_serial preprocessing.cpp
- *
- * Usage:
- *   ./preprocessing_serial                        # loads ../../data/single.JPG
- *   ./preprocessing_serial ../../data/1_p1.jpg   # any image
+ *   6. Morphological Opening (erosion followed by dilation)
  */
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
-#include <cstring>
-#include <iostream>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
-// stb_image - single-header image loader (place stb_image.h in the same folder)
-//#define STB_IMAGE_IMPLEMENTATION
-//#include "stb_image.h"
-//#define STB_IMAGE_WRITE_IMPLEMENTATION
-//#include "stb_image_write.h"
+#include "serial/preprocessing.hpp"
 
-#include "../../include/serial/preprocessing.hpp"
-#include "../../include/helpers.hpp"
+#include "helpers.hpp"
+#include "serial/cleaning.hpp"
+
 // ─── Constants (same as the CUDA implementation) ─────────────────────────────
 static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS  = 256;
@@ -211,55 +201,7 @@ static void binarize(
 
     for (size_t i = 0; i < gray.size(); ++i)
         binary[i] = (gray[i] > threshold) ? 255u : 0u;
-
 }
-
-
-
-// -----------------------------------------------------------------------------
-// STEP 6 - Morphological Opening
-// -----------------------------------------------------------------------------
-static void morphology_filter(
-    const std::vector<uint8_t>& in,
-    int width,
-    int height,
-    int radius,
-    bool dilate,
-    std::vector<uint8_t>& out)
-{
-    out.resize(in.size());
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-
-            uint8_t result = dilate ? 0u : 255u;
-
-            for (int dy = -radius; dy <= radius; ++dy) {
-                for (int dx = -radius; dx <= radius; ++dx) {
-
-                    int sy = clamp(y + dy, 0, height - 1);
-                    int sx = clamp(x + dx, 0, width - 1);
-
-                    uint8_t value = in[sy * width + sx];
-
-                    if (dilate) {
-                        if (value > result)
-                            result = value;
-                    } else {
-                        if (value < result)
-                            result = value;
-                    }
-                }
-            }
-
-            out[y * width + x] = result;
-        }
-    }
-}
-
-
-
-
 
 // -----------------------------------------------------------------------------
 // Main pipeline — combines all steps
@@ -267,10 +209,13 @@ static void morphology_filter(
 
 ImageU8 preprocess(
         const uint8_t* rgb,
-        int width, 
+        int width,
         int height,
         int ksize,
-        float sigma)
+        float sigma,
+        int morphology_kernel_width,
+        int morphology_kernel_height,
+        int morphology_iterations)
 {
     ImageU8 result;
     result.width = width;
@@ -293,86 +238,20 @@ ImageU8 preprocess(
     compute_histogram(blurred, hist);
 
     // 4b — Otsu
-    auto threshold = otsu_threshold(hist, width * height);
+    const float threshold = otsu_threshold(hist, width * height);
 
-   // 5 — Binarization
+    // 5 — Binarization
     std::vector<uint8_t> binary;
     binarize(blurred, threshold, binary);
 
     // 6 — Morphological Opening
-    int morph_radius = 2;   // 1 = 3x3 Filter
+    ImageU8 binary_image;
+    binary_image.width = width;
+    binary_image.height = height;
+    binary_image.data = std::move(binary);
 
-    std::vector<uint8_t> eroded;
-
-    morphology_filter(
-        binary,
-        width,
-        height,
-        morph_radius,
-        false,      // erosion
-        eroded);
-
-    morphology_filter(
-        eroded,
-        width,
-        height,
-        morph_radius,
-        true,       // dilation
-        result.data);
+    const ImageU8 morphology_kernel = make_kernel(morphology_kernel_width, morphology_kernel_height);
+    morphological_open(binary_image, morphology_kernel, result, morphology_iterations);
 
     return result;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// main
-// ─────────────────────────────────────────────────────────────────────────────
-int main(int argc, char** argv)
-{
-    const char* input_path  = (argc > 1) ? argv[1] : "../../data/single.JPG";
-    // Build output path by prefixing the input filename with "binary_" and using .png
-    std::string input_str = input_path;
-    std::string output_path;
-    {
-        size_t pos = input_str.find_last_of("/\\");
-        std::string dir = (pos == std::string::npos) ? std::string() : input_str.substr(0, pos + 1);
-        std::string filename = (pos == std::string::npos) ? input_str : input_str.substr(pos + 1);
-        size_t dot = filename.find_last_of('.');
-        std::string base = (dot == std::string::npos) ? filename : filename.substr(0, dot);
-        output_path = dir + "binary_" + base + ".png";
-    }
-
-    // Load image
-    int W, H, channels;
-    uint8_t* rgb = stbi_load(input_path, &W, &H, &channels, 3);
-    if (!rgb) {
-        std::cerr << "Error: Could not load image: " << input_path
-                  << "\n" << stbi_failure_reason() << "\n";
-        return EXIT_FAILURE;
-    }
-    std::cout << "Loaded image: " << input_path
-              << "  (" << W << " x " << H << ")\n";
-
-    // Run pipeline (ksize=5, sigma=1.0 — same as Python reference)
-    auto res = preprocess(rgb, W, H, 5, 1.0f);
-    stbi_image_free(rgb);
-
-    // Statistik
-    int white = 0;
-for (uint8_t v : res.data)
-    white += (v == 255);
-
-int total = W * H;
-
-std::cout << "\n-- Result ---------------------------------\n";
-std::cout << "Foreground        : " << white
-          << " pixels  (" << 100.f * white / total << " %)\n";
-std::cout << "Background        : " << (total - white)
-          << " pixels  (" << 100.f * (total - white) / total << " %)\n";
-
-if (stbi_write_png(output_path.c_str(), W, H, 1, res.data.data(), W))
-    std::cout << "\nSaved: " << output_path << "\n";
-else
-    std::cerr << "Error saving: " << output_path << "\n";
-
-    return EXIT_SUCCESS;
 }

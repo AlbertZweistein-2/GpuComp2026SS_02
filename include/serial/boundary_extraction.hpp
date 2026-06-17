@@ -1,8 +1,5 @@
 #pragma once
 
-// #include <cstdint>
-// #include <utility>
-// #include <vector>
 #include "types.hpp"
 
 void get_external_boundary_mask(

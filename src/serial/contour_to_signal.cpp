@@ -1,12 +1,9 @@
 #include <iostream>
-#include <vector>
 #include <cmath>
 #include <utility>
 #include <algorithm>
-#include <cstdint>
 #include <set>
 
-#include "types.hpp"
 #include "serial/contour_to_signal.hpp"
 
 

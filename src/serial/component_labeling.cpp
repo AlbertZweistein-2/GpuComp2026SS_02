@@ -1,5 +1,4 @@
 #include "serial/component_labeling.hpp"
-#include "types.hpp"
 
 #include <algorithm>
 #include <queue>

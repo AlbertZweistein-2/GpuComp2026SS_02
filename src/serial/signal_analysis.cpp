@@ -1,16 +1,9 @@
 #include "serial/signal_analysis.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <vector>
-#include <string>
-
-
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <iomanip>
-#include <array>
-#include <cstdint>
 
 // --- Stage 1: Centered Moving Average
 Signal smooth_signal(const Signal& signal, int k) {

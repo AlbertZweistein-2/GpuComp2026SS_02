@@ -1,8 +1,7 @@
 #pragma once
 
-#include <cstdint>
-// #include <utility>
-#include <vector>
+#include <cstddef>
+
 #include "types.hpp"
 
 void morphological_open(
@@ -17,6 +16,6 @@ inline ImageU8 make_kernel(int width, int height)
     ImageU8 kernel;
     kernel.width = width;
     kernel.height = height;
-    kernel.data.assign(static_cast<size_t>(width) * height, 1);
+    kernel.data.assign(static_cast<std::size_t>(width) * height, 1);
     return kernel;
 }
