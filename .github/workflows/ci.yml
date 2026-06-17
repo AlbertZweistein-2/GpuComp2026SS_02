@@ -71,6 +71,16 @@ jobs:
               -I include -o test_visualization
           ./test_visualization
 
+      - name: Build serial pipeline
+        run: |
+          sed -i 's/\r//' build_serial.sh
+          DEBUG=0 TIMINGS=0 ./build_serial.sh
+
+      - name: Run full serial pipeline
+        run: |
+          ./build/pipeline data/single.JPG data/pipeline_output
+          test -f data/pipeline_output/single_overlays.png
+
       - name: Cleanup test executables
         if: always()
         run: rm -f test_contour_to_signal test_cleaning test_visualization *.o
