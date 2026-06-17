@@ -17,6 +17,58 @@ git rm -r --cached build
 git add .gitignore
 ```
 
+## Cluster Build (no CMake)
+
+Use `build_serial.sh` / `build_cuda.sh` on machines without CMake.
+All variables can be overridden via the environment.
+
+### Serial
+
+Default (debug + timings on, `-O3`):
+
+```bash
+./build_serial.sh
+```
+
+No debug output:
+
+```bash
+DEBUG=0 ./build_serial.sh
+```
+
+Custom compiler / optimisation / output path:
+
+```bash
+CXX=g++ OPT=-O2 OUT=bin/pipeline ./build_serial.sh
+```
+
+### CUDA (parallel)
+
+Default (A100 / sm_80, debug + timings on, `-O3`):
+
+```bash
+./build_cuda.sh
+```
+
+Target a V100 (sm_70) or H100 (sm_90):
+
+```bash
+ARCH=sm_70 ./build_cuda.sh
+ARCH=sm_90 ./build_cuda.sh
+```
+
+No debug output:
+
+```bash
+DEBUG=0 ./build_cuda.sh
+```
+
+Custom everything:
+
+```bash
+NVCC=nvcc ARCH=sm_80 OPT=-O2 DEBUG=1 TIMINGS=0 OUT=bin/pipeline_cuda ./build_cuda.sh
+```
+
 ## Configure And Build
 
 Default debug build. This prints pipeline debug logs, puzzle piece results, and sub-stage timings:
