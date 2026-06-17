@@ -20,7 +20,7 @@ set -euo pipefail
 
 NVCC=${NVCC:-nvcc}
 OPT=${OPT:--O3}
-ARCH=${ARCH:-sm_80}
+ARCH=${ARCH:-sm_75}
 DEBUG=${DEBUG:-1}
 TIMINGS=${TIMINGS:-1}
 OUT=${OUT:-build/pipeline_cuda}
