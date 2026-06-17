@@ -23,6 +23,10 @@
 #include "serial/signal_analysis.hpp"
 #include "types.hpp"
 
+// not using CUDA here, overhead would likely dominate
+// only using OpenMP to parallelize drawing each piece
+#include <omp.h>
+
 // ______________________________________________________________________________________________
 
 // sets a single pixel in the RGB image
@@ -222,7 +226,10 @@ void draw_piece_overlays(
     if (!font_loaded)
         std::cerr << "[visualization] warning: font file not found: " << font_path << '\n';
 
-
+    // using OpenMP to parallelize drawing each piece
+    // CUDA does not make sense here, most time is spent with writing the image using stbi_write_png
+    // so CUDA overhead would likely dominate
+    #pragma omp parallel for
     for (const PuzzlePiece& piece : pieces)
     {
         const Region& region = piece.region;
