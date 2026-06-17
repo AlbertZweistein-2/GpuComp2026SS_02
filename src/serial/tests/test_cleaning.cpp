@@ -134,7 +134,9 @@ void test_connected_components()
         0, 255, 255,   0,   0,   0
     };
 
-    auto [labels, regions] = connected_components(image, 3);
+    ImageI32 labels;
+    std::vector<Region> regions;
+    connected_components(image, 3, labels, regions);
 
     ImageI32 expected_labels;
     expected_labels.width = 6;
@@ -194,7 +196,8 @@ void test_extract_piece_mask()
           0,   0,   0,   0,   0
     };
 
-    ImageU8 result = extract_piece_mask(labels, 2);
+    ImageU8 result;
+    extract_piece_mask(labels, 2, result);
 
     assert(result.data == expected.data && "test_extract_piece_mask failed!");
     std::cout << "test_extract_piece_mask passed!" << std::endl;
