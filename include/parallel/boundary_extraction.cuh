@@ -2,16 +2,14 @@
 
 #include <cstdint>
 
-void extract_piece_mask_cuda_device(
-    const int* d_labels,
-    uint8_t* d_mask,
-    int target_label,
-    int total_pixels
-);
+#include "types.hpp"
 
-void get_external_boundary_mask_cuda_device(
-    const uint8_t* d_input,
+void get_piece_boundary_mask_from_labels_cuda(
+    const int* d_labels,
+    const Region& region,
     uint8_t* d_boundary,
-    int width,
-    int height
+    int image_width,
+    int image_height,
+    ImageU8& boundary,
+    Coordinate<int>& offset
 );

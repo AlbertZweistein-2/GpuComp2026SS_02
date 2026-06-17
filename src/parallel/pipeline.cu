@@ -19,15 +19,14 @@
 #include <utility>
 #include <vector>
 
-#include <cuda_runtime.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 
 #include "helpers.hpp"
 #include "parallel/boundary_extraction.cuh"
 #include "parallel/component_labeling.cuh"
+#include "parallel/contour_to_signal.hpp"
 #include "parallel/preprocessing.hpp"
-#include "serial/contour_to_signal.hpp"
 #include "serial/signal_analysis.hpp"
 #include "serial/visualization.hpp"
 #include "stb_image.h"
@@ -35,16 +34,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-#define CUDA_CHECK(call)                                                     \
-    do {                                                                     \
-        cudaError_t err = (call);                                             \
-        if (err != cudaSuccess) {                                             \
-            throw std::runtime_error(                                        \
-                std::string("CUDA error: ") + cudaGetErrorString(err) +       \
-                " at " + __FILE__ + ":" + std::to_string(__LINE__));          \
-        }                                                                    \
-    } while (0)
 
 fs::path project_path(const std::string& path)
 {
@@ -164,6 +153,7 @@ PipelineResult run_cuda(const PipelineOptions& options)
     const fs::path input_image_path = project_path(options.input_image_path);
     PipelineResult result;
 
+    // STEP 1: Load input image
     debug_print("[cuda pipeline] loading image: " + input_image_path.string());
     int width = 0;
     int height = 0;
@@ -174,21 +164,14 @@ PipelineResult run_cuda(const PipelineOptions& options)
     const int total_pixels = width * height;
 
     thrust::device_vector<uint8_t> d_cleaned(static_cast<size_t>(total_pixels));
-    thrust::device_vector<int> d_labels(static_cast<size_t>(total_pixels));
     thrust::device_vector<int> d_compact_labels(static_cast<size_t>(total_pixels));
-    thrust::device_vector<int> d_changed(1);
-    thrust::device_vector<int> d_areas(static_cast<size_t>(total_pixels) + 1);
-    thrust::device_vector<uint8_t> d_piece_mask(static_cast<size_t>(total_pixels));
     thrust::device_vector<uint8_t> d_piece_boundary(static_cast<size_t>(total_pixels));
 
     uint8_t* d_cleaned_ptr = thrust::raw_pointer_cast(d_cleaned.data());
-    int* d_labels_ptr = thrust::raw_pointer_cast(d_labels.data());
     int* d_compact_labels_ptr = thrust::raw_pointer_cast(d_compact_labels.data());
-    int* d_changed_ptr = thrust::raw_pointer_cast(d_changed.data());
-    int* d_areas_ptr = thrust::raw_pointer_cast(d_areas.data());
-    uint8_t* d_piece_mask_ptr = thrust::raw_pointer_cast(d_piece_mask.data());
     uint8_t* d_piece_boundary_ptr = thrust::raw_pointer_cast(d_piece_boundary.data());
 
+    // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[cuda pipeline] preprocessing and cleaning");
     time_stage(result.timings.preprocessing, [&]() {
         preprocess_cuda_device(
@@ -204,21 +187,15 @@ PipelineResult run_cuda(const PipelineOptions& options)
     });
 
     std::vector<Region> regions;
+    // STEP 3: Label connected components and collect piece regions
     debug_print("[cuda pipeline] connected components");
     time_stage(result.timings.connected_components, [&]() {
-        connected_components_cuda_device_raw(
+        const int num_components = connected_components_cuda_device(
             d_cleaned_ptr,
-            d_labels_ptr,
-            d_changed_ptr,
-            d_areas_ptr,
+            d_compact_labels_ptr,
             width,
             height,
-            options.min_region_area,
-            total_pixels + 1);
-        const int num_components = compact_labels_cuda_device(
-            d_labels_ptr,
-            d_compact_labels_ptr,
-            total_pixels);
+            options.min_region_area);
         regions = build_regions_from_labels_cuda(
             d_compact_labels_ptr,
             width,
@@ -240,36 +217,27 @@ PipelineResult run_cuda(const PipelineOptions& options)
                   << '\n';
     }
 
-    ImageU8 piece_boundary;
-    piece_boundary.width = width;
-    piece_boundary.height = height;
-    piece_boundary.data.resize(static_cast<size_t>(total_pixels));
-
     for (const auto& region : regions) {
+        ImageU8 piece_boundary;
+        Coordinate<int> boundary_offset{0, 0};
+
+        // STEP 4: Extract piece boundary from the compact label image
         debug_print("[cuda pipeline] extracting piece boundary: " + std::to_string(region.label));
         time_stage(result.timings.boundary_extraction, [&]() {
-            extract_piece_mask_cuda_device(
+            get_piece_boundary_mask_from_labels_cuda(
                 d_compact_labels_ptr,
-                d_piece_mask_ptr,
-                region.label,
-                total_pixels);
-            get_external_boundary_mask_cuda_device(
-                d_piece_mask_ptr,
+                region,
                 d_piece_boundary_ptr,
                 width,
-                height);
-            CUDA_CHECK(cudaDeviceSynchronize());
-
-            CUDA_CHECK(cudaMemcpy(
-                piece_boundary.data.data(),
-                d_piece_boundary_ptr,
-                static_cast<size_t>(total_pixels) * sizeof(uint8_t),
-                cudaMemcpyDeviceToHost));
+                height,
+                piece_boundary,
+                boundary_offset);
         });
 
         PuzzlePiece piece;
         piece.region = region;
 
+        // STEP 5: Convert host boundary mask to global contour points
         debug_print("[cuda pipeline] extracting contour: " + std::to_string(region.label));
         time_stage(result.timings.contour_extraction, [&]() {
             find_contour_chain_approx_simple(
@@ -277,9 +245,14 @@ PipelineResult run_cuda(const PipelineOptions& options)
                 piece_boundary.width,
                 piece_boundary.height,
                 piece.contour);
+            for (Coordinate<int>& point : piece.contour) {
+                point.a += boundary_offset.a;
+                point.b += boundary_offset.b;
+            }
         });
 
         CoordinateVector<int> smoothed_contour;
+        // STEP 6: Smooth contour before signal extraction
         debug_print("[cuda pipeline] smoothing contour: " + std::to_string(region.label));
         time_stage(result.timings.contour_smoothing, [&]() {
             smoothed_contour = piece.contour;
@@ -287,6 +260,7 @@ PipelineResult run_cuda(const PipelineOptions& options)
         });
 
         Coordinate<float> circle_center{0.0f, 0.0f};
+        // STEP 7: Approximate enclosing circle center
         debug_print("[cuda pipeline] approximating enclosing circle: " + std::to_string(region.label));
         time_stage(result.timings.enclosing_circle, [&]() {
             float radius = 0.0f;
@@ -294,17 +268,20 @@ PipelineResult run_cuda(const PipelineOptions& options)
         });
 
         Signal raw_radial_signal;
+        // STEP 8: Convert contour to radial signal
         debug_print("[cuda pipeline] calculating radial signal: " + std::to_string(region.label));
         time_stage(result.timings.radial_signal, [&]() {
             radial_signal(smoothed_contour, circle_center, raw_radial_signal);
         });
 
         Signal smoothed_radial_signal;
+        // STEP 9: Smooth radial signal for corner detection
         debug_print("[cuda pipeline] smoothing signal: " + std::to_string(region.label));
         time_stage(result.timings.signal_smoothing, [&]() {
             smoothed_radial_signal = smooth_signal(raw_radial_signal, options.peak_smoothing_window);
         });
 
+        // STEP 10: Detect the four corner peaks
         debug_print("[cuda pipeline] detecting peaks: " + std::to_string(region.label));
         time_stage(result.timings.peak_detection, [&]() {
             piece.corner_indices = find_triangular_peaks(
@@ -314,6 +291,7 @@ PipelineResult run_cuda(const PipelineOptions& options)
                 options.peak_min_distance);
         });
 
+        // STEP 11: Classify edge types and lookup piece class
         debug_print("[cuda pipeline] classifying edges: " + std::to_string(region.label));
         time_stage(result.timings.edge_classification, [&]() {
             piece.edge_labels = classify_edges(
@@ -327,6 +305,7 @@ PipelineResult run_cuda(const PipelineOptions& options)
         result.pieces.push_back(std::move(piece));
     }
 
+    // STEP 12: Draw final contour and bounding-box overlay image
     time_stage(result.timings.visualization, [&]() {
         const fs::path output_dir = project_path(options.output_dir);
         fs::create_directories(output_dir);

@@ -44,6 +44,14 @@ void connected_components_cuda_device_raw(
     int max_label_count
 );
 
+int connected_components_cuda_device(
+    const uint8_t* d_binary,
+    int* d_compact_labels,
+    int width,
+    int height,
+    int min_area
+);
+
 int compact_labels_cuda_device(
     const int* d_labels,
     int* d_compact_labels,

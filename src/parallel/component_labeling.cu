@@ -224,6 +224,35 @@ void connected_components_cuda_device_raw(
     cudaDeviceSynchronize();
 }
 
+int connected_components_cuda_device(
+    const uint8_t* d_binary,
+    int* d_compact_labels,
+    int width,
+    int height,
+    int min_area)
+{
+    const int total_pixels = width * height;
+
+    thrust::device_vector<int> d_labels(static_cast<size_t>(total_pixels));
+    thrust::device_vector<int> d_changed(1);
+    thrust::device_vector<int> d_areas(static_cast<size_t>(total_pixels) + 1);
+
+    connected_components_cuda_device_raw(
+        d_binary,
+        thrust::raw_pointer_cast(d_labels.data()),
+        thrust::raw_pointer_cast(d_changed.data()),
+        thrust::raw_pointer_cast(d_areas.data()),
+        width,
+        height,
+        min_area,
+        total_pixels + 1);
+
+    return compact_labels_cuda_device(
+        thrust::raw_pointer_cast(d_labels.data()),
+        d_compact_labels,
+        total_pixels);
+}
+
 int compact_labels_cuda_device(
     const int* d_labels,
     int* d_compact_labels,
