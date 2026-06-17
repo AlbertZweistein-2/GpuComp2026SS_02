@@ -136,6 +136,60 @@ nm -C /tmp/gpucomp-nodebug/pipeline | rg "print_summary|debug_print"
 
 No output means the debug functions are not present.
 
+## CUDA Pipeline
+
+### Configure And Build
+
+CUDA must be enabled explicitly via `-DPIPELINE_ENABLE_CUDA=ON`.
+
+Default debug build:
+
+```bash
+cmake -S . -B build -DPIPELINE_ENABLE_CUDA=ON
+cmake --build build --target pipeline_cuda -j
+```
+
+Build without debug output:
+
+```bash
+cmake -S . -B build -DPIPELINE_ENABLE_CUDA=ON -DPIPELINE_DEBUG_OUTPUT=OFF
+cmake --build build --target pipeline_cuda -j
+```
+
+Clean rebuild from scratch:
+
+```bash
+rm -rf build
+cmake -S . -B build -DPIPELINE_ENABLE_CUDA=ON
+cmake --build build --target pipeline_cuda -j
+```
+
+### Run CUDA Pipeline
+
+Run with the default image:
+
+```bash
+./build/pipeline_cuda
+```
+
+Run with a specific input image:
+
+```bash
+./build/pipeline_cuda data/single.JPG
+```
+
+Run with a specific input image and output directory:
+
+```bash
+./build/pipeline_cuda data/single.JPG data/pipeline_output
+```
+
+Run another dataset image:
+
+```bash
+./build/pipeline_cuda data/1_p1.jpg data/pipeline_output
+```
+
 ## Git Status
 
 Show all changed files:
