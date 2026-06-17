@@ -1,4 +1,4 @@
-#include "signal_analysis_funcs.cuh"
+#include "parallel/signal_analysis.cuh"
 
 #include <algorithm>
 #include <cmath>

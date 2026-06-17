@@ -1,8 +1,6 @@
-#include "serial/visualization.hpp"
+#include "parallel/visualization.hpp"
 
-#define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -25,9 +23,13 @@
 
 // not using CUDA here, overhead would likely dominate
 // only using OpenMP to parallelize drawing each piece
+#ifdef _OPENMP
 #include <omp.h>
+#endif
 
 // ______________________________________________________________________________________________
+
+namespace {
 
 // sets a single pixel in the RGB image
 inline void set_pixel(std::vector<uint8_t>& img, int width, int height,
@@ -197,6 +199,10 @@ void draw_text(std::vector<uint8_t>& img, int img_width, int img_height,
 
 // ______________________________________________________________________________________________
 
+} // namespace
+
+namespace parallel_visualization {
+
 void draw_piece_overlays(
     const uint8_t* rgb_data,
     int width,
@@ -226,12 +232,13 @@ void draw_piece_overlays(
     if (!font_loaded)
         std::cerr << "[visualization] warning: font file not found: " << font_path << '\n';
 
-    // using OpenMP to parallelize drawing each piece
-    // CUDA does not make sense here, most time is spent with writing the image using stbi_write_png
-    // so CUDA overhead would likely dominate
-    #pragma omp parallel for
-    for (const PuzzlePiece& piece : pieces)
+    // Use OpenMP when enabled; writing the PNG remains serial.
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
+    for (std::ptrdiff_t piece_idx = 0; piece_idx < static_cast<std::ptrdiff_t>(pieces.size()); ++piece_idx)
     {
+        const PuzzlePiece& piece = pieces[static_cast<size_t>(piece_idx)];
         const Region& region = piece.region;
         const CoordinateVector<int>& contour = piece.contour;
 
@@ -277,3 +284,5 @@ void draw_piece_overlays(
         stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
     }
 }
+
+} // namespace parallel_visualization

@@ -9,3 +9,5 @@
 #include "parallel/contour_to_signal.hpp"
 #include "parallel/pipeline.hpp"
 #include "parallel/preprocessing.hpp"
+#include "parallel/signal_analysis.cuh"
+#include "parallel/visualization.hpp"

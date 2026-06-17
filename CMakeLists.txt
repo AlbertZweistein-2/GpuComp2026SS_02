@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(GpuComp2026SS_02 LANGUAGES CXX)
 
+find_package(OpenMP REQUIRED)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -53,6 +55,7 @@ target_include_directories(serial_pipeline_modules
 target_link_libraries(serial_pipeline_modules
     PUBLIC
         pipeline_common_modules
+        OpenMP::OpenMP_CXX
 )
 
 target_compile_options(serial_pipeline_modules
@@ -129,12 +132,18 @@ if(PIPELINE_ENABLE_CUDA)
         src/parallel/cleaning.cu
         src/parallel/component_labeling.cu
         src/parallel/preprocessing.cu
-        src/parallel/signal_analysis_main.cu
+        src/parallel/signal_analysis.cu
+        src/parallel/visualization.cpp
     )
 
     target_include_directories(cuda_pipeline_modules
         PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+
+    target_link_libraries(cuda_pipeline_modules
+        PUBLIC
+            OpenMP::OpenMP_CXX
     )
 
     target_compile_options(cuda_pipeline_modules
@@ -161,6 +170,7 @@ if(PIPELINE_ENABLE_CUDA)
         PRIVATE
             cuda_pipeline_modules
             pipeline_common_modules
+            OpenMP::OpenMP_CXX
     )
 
     target_compile_options(pipeline_cuda

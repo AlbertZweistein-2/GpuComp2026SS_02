@@ -27,8 +27,8 @@
 #include "parallel/component_labeling.cuh"
 #include "parallel/contour_to_signal.hpp"
 #include "parallel/preprocessing.hpp"
-#include "signal_analysis_funcs.cuh"
-#include "serial/visualization.hpp"
+#include "parallel/signal_analysis.cuh"
+#include "parallel/visualization.hpp"
 #include "stb_image.h"
 
 namespace fs = std::filesystem;
@@ -312,7 +312,12 @@ PipelineResult run_cuda(const PipelineOptions& options)
         const fs::path output_dir = project_path(options.output_dir);
         fs::create_directories(output_dir);
         const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_cuda_overlays.png");
-        draw_piece_overlays(rgb.get(), width, height, result.pieces, overlay_path.string());
+        parallel_visualization::draw_piece_overlays(
+            rgb.get(),
+            width,
+            height,
+            result.pieces,
+            overlay_path.string());
     });
 
     result.timings.total_seconds = total_timer.get();
