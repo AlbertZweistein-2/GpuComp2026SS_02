@@ -26,7 +26,7 @@
 #include "parallel/boundary_extraction.cuh"
 #include "parallel/component_labeling.cuh"
 #include "parallel/contour_to_signal.cuh"
-#include "parallel/preprocessing.hpp"
+#include "parallel/preprocessing.cuh"
 #include "parallel/signal_analysis.cuh"
 #include "parallel/visualization.hpp"
 #include "stb_image.h"

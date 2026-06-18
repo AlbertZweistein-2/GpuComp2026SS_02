@@ -24,44 +24,43 @@
 #include <thrust/extrema.h>
 
 #include "parallel/cleaning.cuh"
-#include "parallel/preprocessing.hpp"
+#include "parallel/preprocessing.cuh"
 
 // ─── Constants (same as the CUDA implementation) ─────────────────────────────
 static constexpr int MAX_KERNEL = 15;
-static constexpr int HIST_BINS  = 256;
-
-
+static constexpr int HIST_BINS = 256;
 
 // -----------------------------------------------------------------------------
 // CUDA helper
 // -----------------------------------------------------------------------------
-#define CUDA_CHECK(call)                                                     \
-    do {                                                                     \
-        cudaError_t err = (call);                                             \
-        if (err != cudaSuccess) {                                             \
-            throw std::runtime_error(                                        \
-                std::string("CUDA error: ") + cudaGetErrorString(err) +       \
-                " at " + __FILE__ + ":" + std::to_string(__LINE__));          \
-        }                                                                    \
+#define CUDA_CHECK(call)                                                \
+    do                                                                  \
+    {                                                                   \
+        cudaError_t err = (call);                                       \
+        if (err != cudaSuccess)                                         \
+        {                                                               \
+            throw std::runtime_error(                                   \
+                std::string("CUDA error: ") + cudaGetErrorString(err) + \
+                " at " + __FILE__ + ":" + std::to_string(__LINE__));    \
+        }                                                               \
     } while (0)
 
-//FOR CUDA KERNELS 
-//Gaussian kernel will be allocated in global memory
-//CHANGE: was returned to const due to performance reasons
+// FOR CUDA KERNELS
+// Gaussian kernel will be allocated in global memory
+// CHANGE: was returned to const due to performance reasons
 
 __constant__ float d_gaussian_kernel[MAX_KERNEL * MAX_KERNEL];
 
-
-//FOR CUDA Impl. 
-// -----------------------------------------------------------------------------
-//STEP 1 — RGB -> Grayscale  
+// FOR CUDA Impl.
+//  -----------------------------------------------------------------------------
+// STEP 1 — RGB -> Grayscale
 //
-// Formula: Y = 0.299·R + 0.587·G + 0.114·B  (ITU-R BT.601)
-// -----------------------------------------------------------------------------
+//  Formula: Y = 0.299·R + 0.587·G + 0.114·B  (ITU-R BT.601)
+//  -----------------------------------------------------------------------------
 
 __global__ void rgb_to_grayscale_kernel(
-    const uint8_t* rgb,
-    float* gray,
+    const uint8_t *rgb,
+    float *gray,
     int width,
     int height)
 {
@@ -69,7 +68,8 @@ __global__ void rgb_to_grayscale_kernel(
     int pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (int idx = pixel_idx; idx < num_pixels; idx += stride) {
+    for (int idx = pixel_idx; idx < num_pixels; idx += stride)
+    {
         int rgb_idx = idx * 3;
 
         float r = static_cast<float>(rgb[rgb_idx]);
@@ -80,29 +80,27 @@ __global__ void rgb_to_grayscale_kernel(
     }
 }
 
-
-
-
-//FOR CUDA Impl. 
-// -----------------------------------------------------------------------------
-// STEP 2 — Normalization
+// FOR CUDA Impl.
+//  -----------------------------------------------------------------------------
+//  STEP 2 — Normalization
 //
-// Scales all pixel values linearly to [0, 255].
-// -----------------------------------------------------------------------------
+//  Scales all pixel values linearly to [0, 255].
+//  -----------------------------------------------------------------------------
 __global__ void copy_minmax_kernel(
-    const float* min_ptr,
-    const float* max_ptr,
-    float* minmax)
+    const float *min_ptr,
+    const float *max_ptr,
+    float *minmax)
 {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
         minmax[0] = *min_ptr;
         minmax[1] = *max_ptr;
     }
 }
 
 __global__ void normalize_kernel(
-    float* gray,
-    const float* minmax,
+    float *gray,
+    const float *minmax,
     int num_pixels)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -115,12 +113,11 @@ __global__ void normalize_kernel(
     if (range < 1e-5f)
         range = 1.0f;
 
-    for (int idx = i; idx < num_pixels; idx += stride) {
+    for (int idx = i; idx < num_pixels; idx += stride)
+    {
         gray[idx] = (gray[idx] - gmin) / range * 255.0f;
     }
 }
-
-
 
 // -----------------------------------------------------------------------------
 // STEP 3a — Create Gaussian kernel
@@ -139,31 +136,32 @@ static std::vector<float> make_gaussian_kernel(int ksize, float sigma)
     int half = ksize / 2;
     float sum = 0.f;
 
-    for (int y = -half; y <= half; ++y) {
-        for (int x = -half; x <= half; ++x) {
-            float v = std::exp(-(x*x + y*y) / (2.f * sigma * sigma));
+    for (int y = -half; y <= half; ++y)
+    {
+        for (int x = -half; x <= half; ++x)
+        {
+            float v = std::exp(-(x * x + y * y) / (2.f * sigma * sigma));
             kernel[(y + half) * ksize + (x + half)] = v;
             sum += v;
         }
     }
 
     // Normalize: sum of all weights = 1
-    for (float& v : kernel)
+    for (float &v : kernel)
         v /= sum;
 
     return kernel;
 }
 
-
-//FOR CUDA Impl. 
-// -----------------------------------------------------------------------------
-// STEP 3b — Gaussian Blur (2-D convolution)
+// FOR CUDA Impl.
+//  -----------------------------------------------------------------------------
+//  STEP 3b — Gaussian Blur (2-D convolution)
 //
-// -----------------------------------------------------------------------------
+//  -----------------------------------------------------------------------------
 
 __global__ void gaussian_blur_kernel(
-    const float* in,
-    float* out,
+    const float *in,
+    float *out,
     int width,
     int height,
     int ksize)
@@ -174,21 +172,24 @@ __global__ void gaussian_blur_kernel(
 
     int half = ksize / 2;
 
-    for (int idx = pixel_idx; idx < num_pixels; idx += stride) {
+    for (int idx = pixel_idx; idx < num_pixels; idx += stride)
+    {
         int y = idx / width;
         int x = idx % width;
 
         float sum = 0.0f;
 
-        for (int ky = 0; ky < ksize; ++ky) {
-            for (int kx = 0; kx < ksize; ++kx) {
+        for (int ky = 0; ky < ksize; ++ky)
+        {
+            for (int kx = 0; kx < ksize; ++kx)
+            {
                 int sy = y - half + ky;
                 int sx = x - half + kx;
 
                 sy = max(0, min(sy, height - 1));
                 sx = max(0, min(sx, width - 1));
 
-                float pixel  = in[sy * width + sx];
+                float pixel = in[sy * width + sx];
                 float weight = d_gaussian_kernel[ky * ksize + kx];
 
                 sum += pixel * weight;
@@ -199,14 +200,13 @@ __global__ void gaussian_blur_kernel(
     }
 }
 
-
 // -----------------------------------------------------------------------------
-//FOR CUDA Impl.
-//STEP 4a — Compute histogram
+// FOR CUDA Impl.
+// STEP 4a — Compute histogram
 // -----------------------------------------------------------------------------
 __global__ void histogram_kernel(
-    const float* gray,
-    uint32_t* hist,
+    const float *gray,
+    uint32_t *hist,
     int num_pixels)
 {
     __shared__ uint32_t local_hist[HIST_BINS];
@@ -219,10 +219,13 @@ __global__ void histogram_kernel(
     int global_id = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (int i = global_id; i < num_pixels; i += stride) {
+    for (int i = global_id; i < num_pixels; i += stride)
+    {
         int bin = static_cast<int>(gray[i]);
-        if (bin < 0) bin = 0;
-        if (bin > 255) bin = 255;
+        if (bin < 0)
+            bin = 0;
+        if (bin > 255)
+            bin = 255;
 
         atomicAdd(&local_hist[bin], 1u);
     }
@@ -233,17 +236,14 @@ __global__ void histogram_kernel(
         atomicAdd(&hist[i], local_hist[i]);
 }
 
-
-
-
 // -----------------------------------------------------------------------------
-//FOR CUDA Impl. 
-//STEP 4b — Otsu threshold
+// FOR CUDA Impl.
+// STEP 4b — Otsu threshold
 // -----------------------------------------------------------------------------
 __global__ void otsu_threshold_kernel(
-    const uint32_t* hist,
+    const uint32_t *hist,
     int total_pixels,
-    float* threshold_out)
+    float *threshold_out)
 {
     if (threadIdx.x != 0 || blockIdx.x != 0)
         return;
@@ -257,7 +257,8 @@ __global__ void otsu_threshold_kernel(
     double max_var = 0.0;
     int threshold = 0;
 
-    for (int t = 0; t < HIST_BINS; ++t) {
+    for (int t = 0; t < HIST_BINS; ++t)
+    {
         w_bg += hist[t];
         if (w_bg == 0.0)
             continue;
@@ -273,7 +274,8 @@ __global__ void otsu_threshold_kernel(
         double diff = mean_bg - mean_fg;
         double var = w_bg * w_fg * diff * diff;
 
-        if (var > max_var) {
+        if (var > max_var)
+        {
             max_var = var;
             threshold = t;
         }
@@ -282,40 +284,39 @@ __global__ void otsu_threshold_kernel(
     *threshold_out = static_cast<float>(threshold);
 }
 
-
 // -----------------------------------------------------------------------------
 // FOR CUDA Impl.
 // STEP 5 — Binarization
 // -----------------------------------------------------------------------------
 __global__ void binarize_kernel(
-    const float* gray,
-    const float* threshold,
-    uint8_t* binary,
+    const float *gray,
+    const float *threshold,
+    uint8_t *binary,
     int num_pixels)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int stride = blockDim.x * gridDim.x;
 
-    for (int idx = i; idx < num_pixels; idx += stride) {
+    for (int idx = i; idx < num_pixels; idx += stride)
+    {
         binary[idx] = (gray[idx] > *threshold) ? 255u : 0u;
     }
 }
-
 
 // -----------------------------------------------------------------------------
 // Preprocessing stages only. Cleaning is in parallel/cleaning.cuh.
 // -----------------------------------------------------------------------------
 
 void preprocess_cuda_device(
-        const uint8_t* rgb,
-        uint8_t* d_cleaned,
-        int width,
-        int height,
-        int ksize,
-        float sigma,
-        int morphology_kernel_width,
-        int morphology_kernel_height,
-        int morphology_iterations)
+    const uint8_t *rgb,
+    uint8_t *d_cleaned,
+    int width,
+    int height,
+    int ksize,
+    float sigma,
+    int morphology_kernel_width,
+    int morphology_kernel_height,
+    int morphology_iterations)
 {
     if (width <= 0 || height <= 0)
         throw std::invalid_argument("width and height must be > 0");
@@ -336,15 +337,15 @@ void preprocess_cuda_device(
         static_cast<size_t>(morphology_kernel_width) * morphology_kernel_height,
         1);
 
-    uint8_t* d_rgb = nullptr;
-    uint8_t* d_binary = nullptr;
-    uint8_t* d_temp = nullptr;
-    uint8_t* d_morphology_kernel = nullptr;
-    float* d_gray = nullptr;
-    float* d_blurred = nullptr;
-    uint32_t* d_hist = nullptr;
-    float* d_threshold = nullptr;
-    float* d_minmax = nullptr;
+    uint8_t *d_rgb = nullptr;
+    uint8_t *d_binary = nullptr;
+    uint8_t *d_temp = nullptr;
+    uint8_t *d_morphology_kernel = nullptr;
+    float *d_gray = nullptr;
+    float *d_blurred = nullptr;
+    uint32_t *d_hist = nullptr;
+    float *d_threshold = nullptr;
+    float *d_minmax = nullptr;
 
     CUDA_CHECK(cudaMalloc(&d_rgb, rgb_bytes));
     CUDA_CHECK(cudaMalloc(&d_binary, binary_bytes));
@@ -453,15 +454,15 @@ void preprocess_cuda_device(
 }
 
 void preprocess_cuda(
-        const uint8_t* rgb,
-        int width,
-        int height,
-        int ksize,
-        float sigma,
-        int morphology_kernel_width,
-        int morphology_kernel_height,
-        int morphology_iterations,
-        ImageU8& result)
+    const uint8_t *rgb,
+    int width,
+    int height,
+    int ksize,
+    float sigma,
+    int morphology_kernel_width,
+    int morphology_kernel_height,
+    int morphology_iterations,
+    ImageU8 &result)
 {
     if (width <= 0 || height <= 0)
         throw std::invalid_argument("width and height must be > 0");
@@ -474,7 +475,7 @@ void preprocess_cuda(
 
     result.data.resize(static_cast<size_t>(num_pixels));
 
-    uint8_t* d_cleaned = nullptr;
+    uint8_t *d_cleaned = nullptr;
 
     CUDA_CHECK(cudaMalloc(&d_cleaned, binary_bytes));
     preprocess_cuda_device(
