@@ -248,14 +248,7 @@ void draw_piece_overlays(
 
         // drawing the label text in white above the bounding box
         std::string piece_label;
-        if (piece.class_label.empty())
-        {
-            piece_label = edges_to_string(piece.edge_labels);
-        }
-        else
-        {
-            piece_label = piece.class_label;
-        }
+        piece_label = piece.class_label;
         std::string text = "Piece " + std::to_string(region.label) + " ; Class " + piece_label;
         // positioning the text above the bounding box with some padding
         int text_y = std::max(0, region.y - static_cast<int>(label_font_size + 8.0f));

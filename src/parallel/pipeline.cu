@@ -109,7 +109,7 @@ namespace
                 std::cout << "Piece label      : " << piece.region.label << '\n';
             }
 
-            std::cout << "  Edge labels          : " << edges_to_string(piece.edge_labels) << '\n';
+            std::cout << "  Edge labels          : " << edges_to_string_cuda(piece.edge_labels) << '\n';
             std::cout << "  Class label          : " << piece.class_label << '\n';
             std::cout << "  Corner indices       : ["
                       << piece.corner_indices[0] << ", "
@@ -286,14 +286,14 @@ PipelineResult run_cuda(const PipelineOptions &options)
         // STEP 9: Smooth radial signal for corner detection
         debug_print("[cuda pipeline] smoothing signal: " + std::to_string(region.label));
         time_stage(result.timings.signal_smoothing, [&]()
-                   { smoothed_radial_signal = parallel_signal::smooth_signal(
+                   { smoothed_radial_signal = smooth_signal_cuda(
                          raw_radial_signal,
                          options.peak_smoothing_window); });
 
         // STEP 10: Detect the four corner peaks
         debug_print("[cuda pipeline] detecting peaks: " + std::to_string(region.label));
         time_stage(result.timings.peak_detection, [&]()
-                   { piece.corner_indices = parallel_signal::find_triangular_peaks(
+                   { piece.corner_indices = find_triangular_peaks_cuda(
                          smoothed_radial_signal,
                          options.peak_min_prominence,
                          options.peak_min_sharpness,
@@ -303,11 +303,11 @@ PipelineResult run_cuda(const PipelineOptions &options)
         debug_print("[cuda pipeline] classifying edges: " + std::to_string(region.label));
         time_stage(result.timings.edge_classification, [&]()
                    {
-            piece.edge_labels = parallel_signal::classify_edges(
+            piece.edge_labels = classify_edges_cuda(
                 raw_radial_signal,
                 piece.corner_indices,
                 options.tol_factor);
-            const std::string edge_label_string = edges_to_string(piece.edge_labels);
+            const std::string edge_label_string = edges_to_string_cuda(piece.edge_labels);
             piece.class_label = puzzle_lookup.getClassLabel(edge_label_string); });
 
         result.pieces.push_back(std::move(piece));
