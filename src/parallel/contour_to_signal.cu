@@ -26,7 +26,7 @@
 // or splitting the image into chunks and separately doing contour tracing
 // all leads to messy reordering and stitching of contours
 // so very complex for very little speedup
-void trace_contour(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
+void trace_contour_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
 {
 
     // Goes from top-left to bottom-right to find the first nonzero pixel
@@ -127,7 +127,7 @@ void trace_contour(const std::vector<uint8_t> &boundary, int width, int height, 
 // Also inherently sequential, therefore not parallelizeable
 // As explained for the last function, also not sensibly parallelizeable
 // very complex for very little speeduo
-void simplify_chain_approx(CoordinateVector<int> &contour)
+void simplify_chain_approx_cuda(CoordinateVector<int> &contour)
 {
     if (contour.size() < 3)
     {
@@ -184,11 +184,11 @@ struct swap_and_b
 // Just a function to first call the two previous functions
 // for contour tracing and simplification
 // and then swaps the coordinates from (y, x) back to (x, y) just like in the original python code
-void find_contour_chain_approx_simple(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
+void find_contour_chain_approx_simple_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
 {
     // just calling the two previous functions
-    trace_contour(boundary, width, height, result);
-    simplify_chain_approx(result);
+    trace_contour_cuda(boundary, width, height, result);
+    simplify_chain_approx_cuda(result);
 
     // swapping coordinates from (y, x) to (x, y)
     // just like in the original python code
@@ -262,7 +262,7 @@ __global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<
 }
 
 // moving average smoothing of the contour points vector
-void smooth_contour(CoordinateVector<int> &points, int window)
+void smooth_contour_cuda(CoordinateVector<int> &points, int window)
 {
     // in case the contour is empty
     // or the window size is too small or too large
@@ -335,7 +335,7 @@ struct square_distance
 };
 
 // Calculates the center and radius of a circle that encloses the contour points
-void enclosing_circle_approx(const CoordinateVector<int> &points, Coordinate<float> &center, float &radius)
+void enclosing_circle_approx_cuda(const CoordinateVector<int> &points, Coordinate<float> &center, float &radius)
 {
     if (points.empty())
     {
@@ -397,7 +397,7 @@ __global__ void radial_signal_kernel(const Coordinate<int> *points, float *signa
 }
 
 // Calculates a vector of distances from the center, one for each contour point
-void radial_signal(const CoordinateVector<int> &points, Coordinate<float> center, Signal &signal)
+void radial_signal_cuda(const CoordinateVector<int> &points, Coordinate<float> center, Signal &signal)
 {
     signal.resize(points.size());
     // using thrust to create device vectors
