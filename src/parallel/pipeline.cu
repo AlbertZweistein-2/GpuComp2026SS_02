@@ -6,7 +6,7 @@
 #define SUB_TIMINGS 0
 #endif
 
-#include "parallel/pipeline.hpp"
+#include "parallel/pipeline.cuh"
 
 #include <algorithm>
 #include <cstdint>
