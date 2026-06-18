@@ -27,7 +27,7 @@ DEFS="-DPIPELINE_BUILD_STANDALONE"
 
 # ── Source files ──────────────────────────────────────────────────────────────
 SRCS=(
-    src/serial/stb_image_impl.cpp
+    src/stb_image_impl.cpp
     src/serial/boundary_extraction.cpp
     src/serial/component_labeling.cpp
     src/serial/contour_to_signal.cpp

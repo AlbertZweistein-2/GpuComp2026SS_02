@@ -23,7 +23,6 @@ struct ImageU8{
 };
 
 struct ImageI32{
-    // QUESTION: Do we really need 32 bit?
     int width;
     int height;
     std::vector<int32_t> data; // row-major order
@@ -66,14 +65,6 @@ struct Coordinate {
         return a == c2.a && b == c2.b;
     }
 };
-
-// Again, a custom coordinate struct
-// but this time with floats
-// only needed for the center point of the encloding circle
-// struct CoordinateFloat {
-//     float a;
-//     float b;
-// };
 
 
 template <typename T>

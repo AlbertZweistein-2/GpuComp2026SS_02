@@ -33,12 +33,8 @@ DEFS="-DCUDA_PIPELINE_BUILD_STANDALONE"
 # ── Source files ──────────────────────────────────────────────────────────────
 # Only stb_image_impl.cpp is needed from serial: it provides STB_IMAGE_IMPLEMENTATION
 # (stbi_load is called directly in pipeline.cu). Everything else is in the parallel sources.
-SERIAL_SRCS=(
-    src/serial/stb_image_impl.cpp
-)
-
-# CUDA parallel modules + entry point
-CUDA_SRCS=(
+SRCS=(
+    src/stb_image_impl.cpp
     src/parallel/boundary_extraction.cu
     src/parallel/cleaning.cu
     src/parallel/component_labeling.cu
