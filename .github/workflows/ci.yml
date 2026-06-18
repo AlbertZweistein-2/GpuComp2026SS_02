@@ -105,14 +105,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y nvidia-cuda-toolkit
 
+      - name: Compile preprocessing.cu
+        run: nvcc -std=c++17 -c src/parallel/preprocessing.cu -I include
+
+      - name: Compile cleaning.cu
+        run: nvcc -std=c++17 -c src/parallel/cleaning.cu -I include
+
+      - name: Compile boundary_extraction.cu
+        run: nvcc -std=c++17 -c src/parallel/boundary_extraction.cu -I include
+
+      - name: Compile component_labeling.cu
+        run: nvcc -std=c++17 -c src/parallel/component_labeling.cu -I include
+
       - name: Compile contour_to_signal.cu
         run: nvcc -std=c++17 -c src/parallel/contour_to_signal.cu -I include
 
-      - name: Compile cleaning_and_boundary_extraction.cu
-        run: nvcc -std=c++17 -c src/parallel/cleaning_and_boundary_extraction.cu -I include
-
-      - name: Compile signal_analysis_main.cu
-        run: nvcc -std=c++17 -c src/parallel/signal_analysis_main.cu -I include
+      - name: Compile signal_analysis.cu
+        run: nvcc -std=c++17 -c src/parallel/signal_analysis.cu -I include
 
       - name: Cleanup CUDA object files
         if: always()
