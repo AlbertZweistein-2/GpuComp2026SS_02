@@ -26,26 +26,12 @@
 #include "parallel/cleaning.cuh"
 #include "parallel/preprocessing.cuh"
 
+#include "helpers.hpp"
+
 // ─── Constants (same as the CUDA implementation) ─────────────────────────────
 static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS = 256;
 
-// -----------------------------------------------------------------------------
-// CUDA helper
-// -----------------------------------------------------------------------------
-#define CUDA_CHECK(call)                                                \
-    do                                                                  \
-    {                                                                   \
-        cudaError_t err = (call);                                       \
-        if (err != cudaSuccess)                                         \
-        {                                                               \
-            throw std::runtime_error(                                   \
-                std::string("CUDA error: ") + cudaGetErrorString(err) + \
-                " at " + __FILE__ + ":" + std::to_string(__LINE__));    \
-        }                                                               \
-    } while (0)
-
-// FOR CUDA KERNELS
 // Gaussian kernel will be allocated in global memory
 // CHANGE: was returned to const due to performance reasons
 

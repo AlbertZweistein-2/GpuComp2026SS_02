@@ -7,24 +7,11 @@
 #include <string>
 
 #include <cuda_runtime.h>
-
-namespace {
-
-#define CUDA_CHECK(call)                                                     \
-    do {                                                                     \
-        cudaError_t err = (call);                                             \
-        if (err != cudaSuccess) {                                             \
-            throw std::runtime_error(                                        \
-                std::string("CUDA error: ") + cudaGetErrorString(err) +       \
-                " at " + __FILE__ + ":" + std::to_string(__LINE__));          \
-        }                                                                    \
-    } while (0)
-
-}
+#include "helpers.hpp"
 
 __global__ void piece_boundary_from_labels_kernel(
-    const int* labels,
-    uint8_t* boundary,
+    const int *labels,
+    uint8_t *boundary,
     int image_width,
     int image_height,
     int target_label,
@@ -36,7 +23,8 @@ __global__ void piece_boundary_from_labels_kernel(
     const int local_x = blockIdx.x * blockDim.x + threadIdx.x;
     const int local_y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    if (local_x >= boundary_width || local_y >= boundary_height) {
+    if (local_x >= boundary_width || local_y >= boundary_height)
+    {
         return;
     }
 
@@ -45,22 +33,27 @@ __global__ void piece_boundary_from_labels_kernel(
     const int boundary_idx = local_y * boundary_width + local_x;
     const int image_idx = y * image_width + x;
 
-    if (labels[image_idx] != target_label) {
+    if (labels[image_idx] != target_label)
+    {
         boundary[boundary_idx] = 0;
         return;
     }
 
     bool is_boundary = false;
-    for (int dy = -1; dy <= 1 && !is_boundary; ++dy) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            if (dx == 0 && dy == 0) {
+    for (int dy = -1; dy <= 1 && !is_boundary; ++dy)
+    {
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            if (dx == 0 && dy == 0)
+            {
                 continue;
             }
 
             const int nx = x + dx;
             const int ny = y + dy;
             if (nx < 0 || nx >= image_width || ny < 0 || ny >= image_height ||
-                labels[ny * image_width + nx] != target_label) {
+                labels[ny * image_width + nx] != target_label)
+            {
                 is_boundary = true;
                 break;
             }
@@ -71,13 +64,13 @@ __global__ void piece_boundary_from_labels_kernel(
 }
 
 void get_piece_boundary_mask_from_labels_cuda(
-    const int* d_labels,
-    const Region& region,
-    uint8_t* d_boundary,
+    const int *d_labels,
+    const Region &region,
+    uint8_t *d_boundary,
     int image_width,
     int image_height,
-    ImageU8& boundary,
-    Coordinate<int>& offset)
+    ImageU8 &boundary,
+    Coordinate<int> &offset)
 {
     const int x0 = std::max(0, region.x - 1);
     const int y0 = std::max(0, region.y - 1);
@@ -96,8 +89,7 @@ void get_piece_boundary_mask_from_labels_cuda(
     dim3 block(16, 16);
     dim3 grid(
         (boundary_width + block.x - 1) / block.x,
-        (boundary_height + block.y - 1) / block.y
-    );
+        (boundary_height + block.y - 1) / block.y);
 
     piece_boundary_from_labels_kernel<<<grid, block>>>(
         d_labels,

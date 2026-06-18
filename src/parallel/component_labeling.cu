@@ -1,4 +1,5 @@
 #include "parallel/component_labeling.cuh"
+#include "helpers.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -217,7 +218,7 @@ void connected_components_cuda_device_raw(
     const int total_pixels = width * height;
 
     init_labels_cuda_device(d_binary, d_labels, width, height);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     int h_changed = 1;
     int iterations = 0;
@@ -226,21 +227,21 @@ void connected_components_cuda_device_raw(
     while (h_changed && iterations < max_iterations)
     {
         h_changed = 0;
-        cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice);
+        CUDA_CHECK(cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice));
 
         propagate_labels_cuda_device(d_binary, d_labels, d_changed, width, height);
-        cudaDeviceSynchronize();
+        CUDA_CHECK(cudaDeviceSynchronize());
 
-        cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost);
+        CUDA_CHECK(cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost));
         ++iterations;
     }
 
     cudaMemset(d_areas, 0, static_cast<size_t>(max_label_count) * sizeof(int));
     count_component_area_cuda_device(d_labels, d_areas, total_pixels);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     filter_small_components_cuda_device(d_labels, d_areas, min_area, total_pixels);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 int connected_components_cuda_device(
@@ -311,7 +312,7 @@ int compact_labels_cuda_device(
         d_compact_labels,
         num_unique,
         total_pixels);
-    cudaDeviceSynchronize();
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     return num_unique;
 }
@@ -325,11 +326,11 @@ std::vector<Region> build_regions_from_labels_cuda(
     const int total_pixels = width * height;
     std::vector<int> h_labels(static_cast<size_t>(total_pixels));
 
-    cudaMemcpy(
+    CUDA_CHECK(cudaMemcpy(
         h_labels.data(),
         d_compact_labels,
         static_cast<size_t>(total_pixels) * sizeof(int),
-        cudaMemcpyDeviceToHost);
+        cudaMemcpyDeviceToHost));
 
     std::vector<Region> regions;
     regions.reserve(static_cast<size_t>(num_components));
@@ -394,11 +395,11 @@ void copy_labels_and_build_regions_cuda(
     labels.height = height;
     labels.data.resize(static_cast<size_t>(total_pixels));
 
-    cudaMemcpy(
+    CUDA_CHECK(cudaMemcpy(
         labels.data.data(),
         d_compact_labels,
         static_cast<size_t>(total_pixels) * sizeof(int),
-        cudaMemcpyDeviceToHost);
+        cudaMemcpyDeviceToHost));
 
     regions.clear();
     regions.reserve(static_cast<size_t>(num_components));

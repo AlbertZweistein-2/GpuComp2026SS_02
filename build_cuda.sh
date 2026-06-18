@@ -59,8 +59,7 @@ ${NVCC} \
     -Iinclude \
     ${DEFS} \
     -Xcompiler -fopenmp \
-    "${SERIAL_SRCS[@]}" \
-    "${CUDA_SRCS[@]}" \
+    "${SRCS[@]}" \
     -o "${OUT}" \
     -lgomp
 
