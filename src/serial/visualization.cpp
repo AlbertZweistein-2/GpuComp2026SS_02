@@ -199,7 +199,10 @@ void draw_piece_overlays(
     const std::vector<PuzzlePiece>& pieces,
     const std::string& output_path)
 {
-    const float label_font_size = 40.0f;
+    //Scaling font size and padding to the image resolution
+    const float label_font_size = 50.0f * (static_cast<float>(height) / 5100.0f); // 5100 is the height of the original image used for scaling
+    const float label_padding = 8.0f * (static_cast<float>(height) / 5100.0f); // 5100 is the height of the original image used for scaling
+    const float padding_left = 16.0f * (static_cast<float>(width) / 5100.0f); // 5100 is the height of the original image used for scaling
 
     // working on a copy so we dont modify the original image
     const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
@@ -250,9 +253,10 @@ void draw_piece_overlays(
         piece_label = piece.class_label;
         std::string text = "Piece " + std::to_string(region.label) + " ; Class " + piece_label;
         // positioning the text above the bounding box with some padding
-        int text_y = std::max(0, region.y - static_cast<int>(label_font_size + 8.0f));
+        int text_y = std::max(0, region.y - static_cast<int>(label_font_size + label_padding));
+        int text_x = std::max(0, region.x - static_cast<int>(padding_left));
         if (font_loaded)
-            draw_text(img, width, height, text, region.x, text_y, label_font_size, 255, 255, 255, font_info);
+            draw_text(img, width, height, text, text_x, text_y, label_font_size, 255, 255, 255, font_info);
     }
 
     // saving output image if path is provided
