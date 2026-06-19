@@ -67,7 +67,6 @@ jobs:
         run: |
           g++ -std=c++17 src/serial/tests/test_visualization.cpp \
               src/serial/visualization.cpp \
-              src/serial/signal_analysis.cpp \
               -I include -o test_visualization
           ./test_visualization
 
