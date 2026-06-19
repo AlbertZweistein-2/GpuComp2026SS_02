@@ -1,29 +1,19 @@
-__pycache__/
+# Python
 *.pyc
+**/__pycache__/
 venv/
 .env/
-.DS_Store
-.vscode/
-
-# C++ Compiled Binaries
-*.out
-*.exe
-test_runner
-
-# Jupyter Checkpoints
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
-# Kompilierte Binaries
-preprocessing_serial
-preprocessing
+# macOS
+.DS_Store
 
-# Ausgabebilder (optional, falls ihr die nicht tracken wollt)
-binary_output_serial.png
-binary_output.png
+# Editors
+.vscode/
 
+# Compiled binaries and build output
+*.out
+*.exe
+test_runner
 build/
-
-
-#
-benchmark_prepro.sh
