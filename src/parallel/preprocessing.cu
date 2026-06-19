@@ -299,18 +299,13 @@ void preprocess_cuda_device(
     int width,
     int height,
     int ksize,
-    float sigma,
-    int morphology_kernel_width,
-    int morphology_kernel_height,
-    int morphology_iterations)
+    float sigma)
 {
     if (width <= 0 || height <= 0)
         throw std::invalid_argument("width and height must be > 0");
 
     if (ksize < 1 || ksize % 2 == 0 || ksize > MAX_KERNEL)
         throw std::invalid_argument("ksize must be odd and <= 15");
-    if (morphology_kernel_width < 1 || morphology_kernel_height < 1)
-        throw std::invalid_argument("morphology kernel dimensions must be > 0");
 
     const int num_pixels = width * height;
 
@@ -319,14 +314,10 @@ void preprocess_cuda_device(
     const size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
 
     std::vector<float> kernel = make_gaussian_kernel(ksize, sigma);
-    std::vector<uint8_t> morphology_kernel(
-        static_cast<size_t>(morphology_kernel_width) * morphology_kernel_height,
-        1);
 
     uint8_t *d_rgb = nullptr;
     uint8_t *d_binary = nullptr;
     uint8_t *d_temp = nullptr;
-    uint8_t *d_morphology_kernel = nullptr;
     float *d_gray = nullptr;
     float *d_blurred = nullptr;
     uint32_t *d_hist = nullptr;
@@ -336,7 +327,6 @@ void preprocess_cuda_device(
     CUDA_CHECK(cudaMalloc(&d_rgb, rgb_bytes));
     CUDA_CHECK(cudaMalloc(&d_binary, binary_bytes));
     CUDA_CHECK(cudaMalloc(&d_temp, binary_bytes));
-    CUDA_CHECK(cudaMalloc(&d_morphology_kernel, morphology_kernel.size() * sizeof(uint8_t)));
     CUDA_CHECK(cudaMalloc(&d_gray, float_bytes));
     CUDA_CHECK(cudaMalloc(&d_blurred, float_bytes));
     CUDA_CHECK(cudaMalloc(&d_hist, HIST_BINS * sizeof(uint32_t)));
@@ -344,11 +334,6 @@ void preprocess_cuda_device(
     CUDA_CHECK(cudaMalloc(&d_minmax, 2 * sizeof(float)));
 
     CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgb_bytes, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(
-        d_morphology_kernel,
-        morphology_kernel.data(),
-        morphology_kernel.size() * sizeof(uint8_t),
-        cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaMemcpyToSymbol(
         d_gaussian_kernel,
@@ -418,20 +403,15 @@ void preprocess_cuda_device(
 
     morphological_open_cuda_device(
         d_binary,
-        d_morphology_kernel,
         d_temp,
         d_cleaned,
         width,
-        height,
-        morphology_kernel_width,
-        morphology_kernel_height,
-        morphology_iterations);
+        height);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     CUDA_CHECK(cudaFree(d_rgb));
     CUDA_CHECK(cudaFree(d_binary));
     CUDA_CHECK(cudaFree(d_temp));
-    CUDA_CHECK(cudaFree(d_morphology_kernel));
     CUDA_CHECK(cudaFree(d_gray));
     CUDA_CHECK(cudaFree(d_blurred));
     CUDA_CHECK(cudaFree(d_hist));
@@ -445,9 +425,6 @@ void preprocess_cuda(
     int height,
     int ksize,
     float sigma,
-    int morphology_kernel_width,
-    int morphology_kernel_height,
-    int morphology_iterations,
     ImageU8 &result)
 {
     if (width <= 0 || height <= 0)
@@ -470,10 +447,7 @@ void preprocess_cuda(
         width,
         height,
         ksize,
-        sigma,
-        morphology_kernel_width,
-        morphology_kernel_height,
-        morphology_iterations);
+        sigma);
 
     CUDA_CHECK(cudaMemcpy(
         result.data.data(),

@@ -5,14 +5,17 @@
 
 #include <cuda_runtime.h>
 
+namespace
+{
+constexpr int MORPH_KERNEL_WIDTH = 5;
+constexpr int MORPH_KERNEL_HEIGHT = 5;
+} // namespace
+
 __global__ void erode_kernel(
     const uint8_t *input,
-    const uint8_t *kernel,
     uint8_t *output,
     int width,
-    int height,
-    int kw,
-    int kh)
+    int height)
 {
     const int x = blockIdx.x * blockDim.x + threadIdx.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -22,19 +25,14 @@ __global__ void erode_kernel(
         return;
     }
 
-    const int pad_w = kw / 2;
-    const int pad_h = kh / 2;
+    const int pad_w = MORPH_KERNEL_WIDTH / 2;
+    const int pad_h = MORPH_KERNEL_HEIGHT / 2;
     bool all_foreground = true;
 
-    for (int ky = 0; ky < kh && all_foreground; ++ky)
+    for (int ky = 0; ky < MORPH_KERNEL_HEIGHT && all_foreground; ++ky)
     {
-        for (int kx = 0; kx < kw; ++kx)
+        for (int kx = 0; kx < MORPH_KERNEL_WIDTH; ++kx)
         {
-            if (kernel[ky * kw + kx] != 1)
-            {
-                continue;
-            }
-
             const int ix = x + kx - pad_w;
             const int iy = y + ky - pad_h;
 
@@ -57,12 +55,9 @@ __global__ void erode_kernel(
 
 __global__ void dilate_kernel(
     const uint8_t *input,
-    const uint8_t *kernel,
     uint8_t *output,
     int width,
-    int height,
-    int kw,
-    int kh)
+    int height)
 {
     const int x = blockIdx.x * blockDim.x + threadIdx.x;
     const int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -72,19 +67,14 @@ __global__ void dilate_kernel(
         return;
     }
 
-    const int pad_w = kw / 2;
-    const int pad_h = kh / 2;
+    const int pad_w = MORPH_KERNEL_WIDTH / 2;
+    const int pad_h = MORPH_KERNEL_HEIGHT / 2;
     bool any_foreground = false;
 
-    for (int ky = 0; ky < kh && !any_foreground; ++ky)
+    for (int ky = 0; ky < MORPH_KERNEL_HEIGHT && !any_foreground; ++ky)
     {
-        for (int kx = 0; kx < kw; ++kx)
+        for (int kx = 0; kx < MORPH_KERNEL_WIDTH; ++kx)
         {
-            if (kernel[ky * kw + kx] != 1)
-            {
-                continue;
-            }
-
             const int ix = x + kx - pad_w;
             const int iy = y + ky - pad_h;
 
@@ -102,12 +92,9 @@ __global__ void dilate_kernel(
 
 void erode_cuda_device(
     const uint8_t *d_input,
-    const uint8_t *d_kernel,
     uint8_t *d_output,
     int width,
-    int height,
-    int kernel_width,
-    int kernel_height)
+    int height)
 {
     dim3 block(16, 16);
     dim3 grid(
@@ -116,22 +103,17 @@ void erode_cuda_device(
 
     erode_kernel<<<grid, block>>>(
         d_input,
-        d_kernel,
         d_output,
         width,
-        height,
-        kernel_width,
-        kernel_height);
+        height);
+    CUDA_CHECK(cudaGetLastError());
 }
 
 void dilate_cuda_device(
     const uint8_t *d_input,
-    const uint8_t *d_kernel,
     uint8_t *d_output,
     int width,
-    int height,
-    int kernel_width,
-    int kernel_height)
+    int height)
 {
     dim3 block(16, 16);
     dim3 grid(
@@ -140,81 +122,28 @@ void dilate_cuda_device(
 
     dilate_kernel<<<grid, block>>>(
         d_input,
-        d_kernel,
         d_output,
         width,
-        height,
-        kernel_width,
-        kernel_height);
+        height);
+    CUDA_CHECK(cudaGetLastError());
 }
 
 void morphological_open_cuda_device(
     const uint8_t *d_input,
-    const uint8_t *d_kernel,
     uint8_t *d_temp,
     uint8_t *d_output,
     int width,
-    int height,
-    int kernel_width,
-    int kernel_height,
-    int iterations)
+    int height)
 {
-    if (iterations <= 0)
-    {
-        CUDA_CHECK(cudaMemcpy(
-            d_output,
-            d_input,
-            static_cast<size_t>(width) * height * sizeof(uint8_t),
-            cudaMemcpyDeviceToDevice));
-        return;
-    }
+    erode_cuda_device(
+        d_input,
+        d_temp,
+        width,
+        height);
 
-    const uint8_t *src = d_input;
-    uint8_t *dst = d_temp;
-
-    for (int i = 0; i < iterations; ++i)
-    {
-        erode_cuda_device(
-            src,
-            d_kernel,
-            dst,
-            width,
-            height,
-            kernel_width,
-            kernel_height);
-
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        src = dst;
-        dst = (dst == d_temp) ? d_output : d_temp;
-    }
-
-    src = (iterations % 2 == 1) ? d_temp : d_output;
-    dst = (src == d_temp) ? d_output : d_temp;
-
-    for (int i = 0; i < iterations; ++i)
-    {
-        dilate_cuda_device(
-            src,
-            d_kernel,
-            dst,
-            width,
-            height,
-            kernel_width,
-            kernel_height);
-
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        src = dst;
-        dst = (dst == d_temp) ? d_output : d_temp;
-    }
-
-    if (src != d_output)
-    {
-        CUDA_CHECK(cudaMemcpy(
-            d_output,
-            src,
-            static_cast<size_t>(width) * height * sizeof(uint8_t),
-            cudaMemcpyDeviceToDevice));
-    }
+    dilate_cuda_device(
+        d_temp,
+        d_output,
+        width,
+        height);
 }

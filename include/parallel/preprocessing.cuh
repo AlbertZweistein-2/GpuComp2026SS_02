@@ -10,9 +10,6 @@ void preprocess_cuda(
     int height,
     int ksize,
     float sigma,
-    int morphology_kernel_width,
-    int morphology_kernel_height,
-    int morphology_iterations,
     ImageU8& result
 );
 
@@ -22,8 +19,5 @@ void preprocess_cuda_device(
     int width,
     int height,
     int ksize,
-    float sigma,
-    int morphology_kernel_width,
-    int morphology_kernel_height,
-    int morphology_iterations
+    float sigma
 );

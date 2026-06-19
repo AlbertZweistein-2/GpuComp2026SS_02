@@ -49,7 +49,7 @@ Build flags:
 |:-----|:--------|:-------|
 | `DEBUG` | `0` | enable verbose logging |
 | `TIMINGS` | `1` | measure per-stage runtimes |
-| `PERSIST_TIMINGS` | `0` | append serial timing results to CSV |
+| `PERSIST_TIMINGS` | `0` | append timing results to CSV |
 | `ARCH` | `sm_75` | CUDA target architecture|
 
 Example: `TIMINGS=1 DEBUG=0 ./build_cuda.sh`
