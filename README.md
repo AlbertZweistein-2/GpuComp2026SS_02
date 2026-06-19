@@ -1,14 +1,12 @@
 # GPU-Accelerated Jigsaw Puzzle Piece Detection
 
-TU Wien — GPU Architecture & Computing, SS2026, Group 2.
+GPU Architecture & Computing, SS2026, Group 2.
 
 Eight-stage computer vision pipeline that detects and classifies jigsaw puzzle pieces in images. Implemented as a serial C++ baseline and a parallel CUDA variant.
 
 | Input | Output |
 |:-----:|:------:|
 | ![input](docs/single_input.jpg) | ![output](docs/single_output.png) |
-
-## Team
 
 ## Team
 
@@ -33,13 +31,13 @@ Each stage has a serial C++ and, if possible, a parallel CUDA implementation.
 
 Both scripts live in the repo root and require no CMake. Variables can be overridden via the environment.
 
-### Serial (local / cluster)
+#### Serial (local / cluster)
 
 ```bash
 ./build_serial.sh
 ```
 
-### CUDA (cluster)
+#### CUDA (cluster)
 
 ```bash
 ./build_cuda.sh
@@ -57,8 +55,15 @@ Example: `TIMINGS=1 DEBUG=0 ./build_cuda.sh`
 
 ## Run
 
+#### Serial (local / cluster)
+
 ```bash
 ./build/pipeline data/1_p1.jpg data/pipeline_output
+```
+
+#### CUDA (cluster)
+
+```bash
 ./build/pipeline_cuda data/1_p1.jpg data/pipeline_output
 ```
 
