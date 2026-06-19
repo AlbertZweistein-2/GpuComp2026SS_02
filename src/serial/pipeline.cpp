@@ -70,6 +70,75 @@ uint8_t* load_rgb_image(const fs::path& path, int& width, int& height)
 
 } // namespace
 
+#if DEBUG_LEVEL >= 1
+void print_summary(const PipelineOptions& options, const PipelineResult& results)
+{
+    const auto print_timing = [](const char* label, double seconds) {
+        std::cout << "  " << std::left << std::setw(22) << label
+                  << std::right << std::fixed << std::setprecision(3)
+                  << seconds * 1000.0 << " ms\n";
+    };
+
+    std::cout << "\n-- Pipeline output -------------------------\n";
+    std::cout << "Input image      : " << options.input_image_path << '\n';
+    std::cout << "Output directory : " << options.output_dir << '\n';
+    std::cout << "Pieces found     : " << results.pieces.size() << '\n';
+
+    if (results.pieces.empty()) {
+        std::cout << "No puzzle pieces were detected.\n";
+    }
+
+    for (size_t i = 0; i < results.pieces.size(); ++i) {
+        const PuzzlePiece& piece = results.pieces[i];
+
+        std::cout << '\n';
+        if (results.pieces.size() > 1) {
+            std::cout << "Piece " << (i + 1) << " (label " << piece.region.label << ")\n";
+        } else {
+            std::cout << "Piece label      : " << piece.region.label << '\n';
+        }
+
+        std::cout << "  Edge labels          : " << edges_to_string(piece.edge_labels) << '\n';
+        std::cout << "  Class label          : " << piece.class_label << '\n';
+        std::cout << "  Corner indices       : ["
+                  << piece.corner_indices[0] << ", "
+                  << piece.corner_indices[1] << ", "
+                  << piece.corner_indices[2] << ", "
+                  << piece.corner_indices[3] << "]\n";
+        std::cout << "  Contour points       : " << piece.contour.size() << '\n';
+    }
+
+    std::cout << "\n-- Timings -------------------------------\n";
+    print_timing("Total wall time", results.timings.total_seconds);
+#if SUB_TIMINGS >= 1
+    std::vector<std::pair<std::string_view, double>> stage_timings = {
+        {"Preprocessing", results.timings.preprocessing},
+        {"Connected components", results.timings.connected_components},
+        {"Boundary extraction", results.timings.boundary_extraction},
+        {"Contour extraction", results.timings.contour_extraction},
+        {"Contour smoothing", results.timings.contour_smoothing},
+        {"Enclosing circle", results.timings.enclosing_circle},
+        {"Radial signal", results.timings.radial_signal},
+        {"Signal smoothing", results.timings.signal_smoothing},
+        {"Peak detection", results.timings.peak_detection},
+        {"Edge classification", results.timings.edge_classification},
+        {"Visualization", results.timings.visualization},
+    };
+
+    std::sort(stage_timings.begin(), stage_timings.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  return lhs.second > rhs.second;
+              });
+
+    for (const auto& [label, seconds] : stage_timings) {
+        print_timing(label.data(), seconds);
+    }
+#else
+    std::cout << "  Sub timings disabled; compile with SUB_TIMINGS >= 1 to measure stages.\n";
+#endif
+}
+#endif
+
 PipelineResult run(const PipelineOptions& options)
 {
     Timer total_timer;
@@ -219,75 +288,6 @@ PipelineResult run(const PipelineOptions& options)
 
     return result;
 }
-
-#if DEBUG_LEVEL >= 1
-void print_summary(const PipelineOptions& options, const PipelineResult& results)
-{
-    const auto print_timing = [](const char* label, double seconds) {
-        std::cout << "  " << std::left << std::setw(22) << label
-                  << std::right << std::fixed << std::setprecision(3)
-                  << seconds * 1000.0 << " ms\n";
-    };
-
-    std::cout << "\n-- Pipeline output -------------------------\n";
-    std::cout << "Input image      : " << options.input_image_path << '\n';
-    std::cout << "Output directory : " << options.output_dir << '\n';
-    std::cout << "Pieces found     : " << results.pieces.size() << '\n';
-
-    if (results.pieces.empty()) {
-        std::cout << "No puzzle pieces were detected.\n";
-    }
-
-    for (size_t i = 0; i < results.pieces.size(); ++i) {
-        const PuzzlePiece& piece = results.pieces[i];
-
-        std::cout << '\n';
-        if (results.pieces.size() > 1) {
-            std::cout << "Piece " << (i + 1) << " (label " << piece.region.label << ")\n";
-        } else {
-            std::cout << "Piece label      : " << piece.region.label << '\n';
-        }
-
-        std::cout << "  Edge labels          : " << edges_to_string(piece.edge_labels) << '\n';
-        std::cout << "  Class label          : " << piece.class_label << '\n';
-        std::cout << "  Corner indices       : ["
-                  << piece.corner_indices[0] << ", "
-                  << piece.corner_indices[1] << ", "
-                  << piece.corner_indices[2] << ", "
-                  << piece.corner_indices[3] << "]\n";
-        std::cout << "  Contour points       : " << piece.contour.size() << '\n';
-    }
-
-    std::cout << "\n-- Timings -------------------------------\n";
-    print_timing("Total wall time", results.timings.total_seconds);
-#if SUB_TIMINGS >= 1
-    std::vector<std::pair<std::string_view, double>> stage_timings = {
-        {"Preprocessing", results.timings.preprocessing},
-        {"Connected components", results.timings.connected_components},
-        {"Boundary extraction", results.timings.boundary_extraction},
-        {"Contour extraction", results.timings.contour_extraction},
-        {"Contour smoothing", results.timings.contour_smoothing},
-        {"Enclosing circle", results.timings.enclosing_circle},
-        {"Radial signal", results.timings.radial_signal},
-        {"Signal smoothing", results.timings.signal_smoothing},
-        {"Peak detection", results.timings.peak_detection},
-        {"Edge classification", results.timings.edge_classification},
-        {"Visualization", results.timings.visualization},
-    };
-
-    std::sort(stage_timings.begin(), stage_timings.end(),
-              [](const auto& lhs, const auto& rhs) {
-                  return lhs.second > rhs.second;
-              });
-
-    for (const auto& [label, seconds] : stage_timings) {
-        print_timing(label.data(), seconds);
-    }
-#else
-    std::cout << "  Sub timings disabled; compile with SUB_TIMINGS >= 1 to measure stages.\n";
-#endif
-}
-#endif
 
 #ifdef PIPELINE_BUILD_STANDALONE
 int main(int argc, char** argv)
