@@ -12,7 +12,6 @@
 #include <string>
 #include <vector>
 
-#include "serial/signal_analysis.hpp"
 #include "types.hpp"
 
 // not using CUDA here, overhead would likely dominate

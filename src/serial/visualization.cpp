@@ -20,7 +20,6 @@
 #include <string>
 #include <vector>
 
-#include "serial/signal_analysis.hpp"
 #include "types.hpp"
 
 // ______________________________________________________________________________________________
