@@ -2,7 +2,7 @@
 
 TU Wien — GPU Architecture & Computing, SS2026, Group 2.
 
-Eight-stage computer vision pipeline that detects and classifies jigsaw puzzle pieces in digital images. Implemented as a serial C++ baseline and a parallel CUDA variant.
+Eight-stage computer vision pipeline that detects and classifies jigsaw puzzle pieces in images. Implemented as a serial C++ baseline and a parallel CUDA variant.
 
 | Input | Output |
 |:-----:|:------:|
@@ -68,5 +68,3 @@ Example: `TIMINGS=1 DEBUG=0 ./build_cuda.sh`
 ssh bastion
 ssh gpu3vm2
 ```
-
-Repo lives at `~/GpuComp2026SS_02`. Build and run as above.
