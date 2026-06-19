@@ -9,8 +9,12 @@
 #   NVCC    – CUDA compiler            (default: nvcc)
 #   OPT     – optimisation flag        (default: -O3)
 #   ARCH    – GPU architecture         (default: sm_75)
-#   DEBUG   – 1 = pipeline log output  (default: 1)
-#   TIMINGS – 1 = sub-stage timings    (default: 1, requires DEBUG=1)
+#               sm_70  → V100
+#               sm_75  → T4
+#               sm_80  → A100
+#               sm_90  → H100
+#   DEBUG   – 1 = pipeline log output  (default: 0)
+#   TIMINGS – 1 = sub-stage timings    (default: 1)
 #   OUT     – output binary path       (default: build/pipeline_cuda)
 
 set -euo pipefail
@@ -18,13 +22,13 @@ set -euo pipefail
 NVCC=${NVCC:-nvcc}
 OPT=${OPT:--O3}
 ARCH=${ARCH:-sm_75}
-DEBUG=${DEBUG:-1}
+DEBUG=${DEBUG:-0}
 TIMINGS=${TIMINGS:-1}
 OUT=${OUT:-build/pipeline_cuda}
 
 # ── Compile definitions ───────────────────────────────────────────────────────
 DEFS="-DCUDA_PIPELINE_BUILD_STANDALONE"
-[ "${DEBUG}"   = "1" ]                            && DEFS="${DEFS} -DDEBUG_LEVEL=1"
+[ "${DEBUG}"   = "1" ] && DEFS="${DEFS} -DDEBUG_LEVEL=1"
 [ "${TIMINGS}" = "1" ] && DEFS="${DEFS} -DSUB_TIMINGS=1"
 
 # ── Source files ──────────────────────────────────────────────────────────────
@@ -52,10 +56,12 @@ echo "  Output: ${OUT}"
 ${NVCC} \
     -std=c++17 \
     "${OPT}" \
+    --use_fast_math \
     -arch="${ARCH}" \
     -Iinclude \
     ${DEFS} \
     -Xcompiler -fopenmp \
+    -Xcompiler -march=native \
     "${SRCS[@]}" \
     -o "${OUT}" \
     -lgomp

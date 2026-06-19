@@ -8,21 +8,21 @@
 # Variables:
 #   CXX     – C++ compiler            (default: g++)
 #   OPT     – optimisation flag       (default: -O3)
-#   DEBUG   – 1 = pipeline log output (default: 1)
-#   TIMINGS – 1 = sub-stage timings   (default: 1, requires DEBUG=1)
+#   DEBUG   – 1 = pipeline log output (default: 0)
+#   TIMINGS – 1 = sub-stage timings   (default: 1)
 #   OUT     – output binary path      (default: build/pipeline)
 
 set -euo pipefail
 
 CXX=${CXX:-g++}
 OPT=${OPT:--O3}
-DEBUG=${DEBUG:-1}
+DEBUG=${DEBUG:-0}
 TIMINGS=${TIMINGS:-1}
 OUT=${OUT:-build/pipeline}
 
 # ── Compile definitions ───────────────────────────────────────────────────────
 DEFS="-DPIPELINE_BUILD_STANDALONE"
-[ "${DEBUG}"   = "1" ]                            && DEFS="${DEFS} -DDEBUG_LEVEL=1"
+[ "${DEBUG}"   = "1" ] && DEFS="${DEFS} -DDEBUG_LEVEL=1"
 [ "${TIMINGS}" = "1" ] && DEFS="${DEFS} -DSUB_TIMINGS=1"
 
 # ── Source files ──────────────────────────────────────────────────────────────
@@ -45,6 +45,6 @@ echo "Building serial pipeline"
 echo "  CXX=${CXX}  OPT=${OPT}  DEBUG=${DEBUG}  TIMINGS=${TIMINGS}"
 echo "  Output: ${OUT}"
 
-${CXX} -std=c++17 "${OPT}" -Iinclude ${DEFS} "${SRCS[@]}" -o "${OUT}"
+${CXX} -std=c++17 "${OPT}" -march=native -Iinclude ${DEFS} "${SRCS[@]}" -o "${OUT}"
 
 echo "Done: ${OUT}"
