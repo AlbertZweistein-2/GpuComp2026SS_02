@@ -57,13 +57,7 @@ std::vector<Region> build_regions_from_labels_cuda(
     int height,
     int num_components);
 
-void copy_labels_and_build_regions_cuda(
-    const int *d_compact_labels,
-    int width,
-    int height,
-    int num_components,
-    ImageI32 &labels,
-    std::vector<Region> &regions);
+
 
 // extracts the binary mask for a single puzzle piece by label
 // sets pixels to 255 where label matches, 0 elsewhere
