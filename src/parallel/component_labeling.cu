@@ -377,9 +377,6 @@ void build_regions_from_labels_cuda(
             regions.push_back(r);
         }
     }
-
-    regions.clear();
-    regions.reserve(static_cast<size_t>(num_components));
 }
 
 __global__ void extract_piece_mask_kernel(
