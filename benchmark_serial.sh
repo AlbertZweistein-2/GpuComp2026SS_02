@@ -7,8 +7,8 @@ OUT_DIR=data/benchmark_results
 CSV=$OUT_DIR/serial.csv
 RUNS=5
 
-IMAGES=("31_19_p2.jpg" "45_1_p2.jpg" "69_4_p1.jpg")
-PIECES=(31 45 69)
+IMAGES=("31_19_p2.jpg" "45_1_p2.jpg" "65_4_p1.jpg")
+PIECES=(31 45 65)
 RESOLUTIONS=("1024x1409" "2048x2817" "4096x5635" "5100x7016")
 
 mkdir -p "$OUT_DIR"
