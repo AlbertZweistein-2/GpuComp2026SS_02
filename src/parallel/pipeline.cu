@@ -205,11 +205,12 @@ PipelineResult run_cuda(const PipelineOptions &options)
             width,
             height,
             options.min_region_area);
-        regions = build_regions_from_labels_cuda(
+        build_regions_from_labels_cuda(
             d_compact_labels_ptr,
             width,
             height,
-            num_components); });
+            num_components,
+            regions); });
     debug_print("[cuda pipeline] found " + std::to_string(regions.size()) + " regions");
 
     result.pieces.reserve(regions.size());

@@ -317,11 +317,12 @@ int compact_labels_cuda_device(
     return num_unique;
 }
 
-std::vector<Region> build_regions_from_labels_cuda(
+void build_regions_from_labels_cuda(
     const int *d_compact_labels,
     int width,
     int height,
-    int num_components)
+    int num_components,
+    std::vector<Region> &regions)
 {
     const int total_pixels = width * height;
     std::vector<int> h_labels(static_cast<size_t>(total_pixels));
@@ -332,7 +333,6 @@ std::vector<Region> build_regions_from_labels_cuda(
         static_cast<size_t>(total_pixels) * sizeof(int),
         cudaMemcpyDeviceToHost));
 
-    std::vector<Region> regions;
     regions.reserve(static_cast<size_t>(num_components));
 
     for (int label = 1; label <= num_components; ++label)
@@ -378,7 +378,8 @@ std::vector<Region> build_regions_from_labels_cuda(
         }
     }
 
-    return regions;
+    regions.clear();
+    regions.reserve(static_cast<size_t>(num_components));
 }
 
 __global__ void extract_piece_mask_kernel(
