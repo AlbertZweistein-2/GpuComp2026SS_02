@@ -23,7 +23,7 @@ OUT=${OUT:-build/pipeline}
 # ── Compile definitions ───────────────────────────────────────────────────────
 DEFS="-DPIPELINE_BUILD_STANDALONE"
 [ "${DEBUG}"   = "1" ]                            && DEFS="${DEFS} -DDEBUG_LEVEL=1"
-[ "${DEBUG}"   = "1" ] && [ "${TIMINGS}" = "1" ] && DEFS="${DEFS} -DSUB_TIMINGS=1"
+[ "${TIMINGS}" = "1" ] && DEFS="${DEFS} -DSUB_TIMINGS=1"
 
 # ── Source files ──────────────────────────────────────────────────────────────
 SRCS=(

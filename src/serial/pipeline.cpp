@@ -70,7 +70,7 @@ uint8_t* load_rgb_image(const fs::path& path, int& width, int& height)
 
 } // namespace
 
-#if DEBUG_LEVEL >= 1
+#if DEBUG_LEVEL >= 1 || SUB_TIMINGS >= 1
 void print_summary(const PipelineOptions& options, const PipelineResult& results)
 {
     const auto print_timing = [](const char* label, double seconds) {
@@ -282,7 +282,7 @@ PipelineResult run(const PipelineOptions& options)
 
     result.timings.total_seconds = total_timer.get();
 
-#if DEBUG_LEVEL >= 1
+#if DEBUG_LEVEL >= 1 || SUB_TIMINGS >= 1
     print_summary(options, result);
 #endif
 

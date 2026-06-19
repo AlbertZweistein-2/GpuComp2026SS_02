@@ -8,10 +8,7 @@
 # Variables:
 #   NVCC    – CUDA compiler            (default: nvcc)
 #   OPT     – optimisation flag        (default: -O3)
-#   ARCH    – GPU architecture         (default: sm_80)
-#               sm_70  → V100
-#               sm_80  → A100
-#               sm_90  → H100
+#   ARCH    – GPU architecture         (default: sm_75)
 #   DEBUG   – 1 = pipeline log output  (default: 1)
 #   TIMINGS – 1 = sub-stage timings    (default: 1, requires DEBUG=1)
 #   OUT     – output binary path       (default: build/pipeline_cuda)
@@ -28,7 +25,7 @@ OUT=${OUT:-build/pipeline_cuda}
 # ── Compile definitions ───────────────────────────────────────────────────────
 DEFS="-DCUDA_PIPELINE_BUILD_STANDALONE"
 [ "${DEBUG}"   = "1" ]                            && DEFS="${DEFS} -DDEBUG_LEVEL=1"
-[ "${DEBUG}"   = "1" ] && [ "${TIMINGS}" = "1" ] && DEFS="${DEFS} -DSUB_TIMINGS=1"
+[ "${TIMINGS}" = "1" ] && DEFS="${DEFS} -DSUB_TIMINGS=1"
 
 # ── Source files ──────────────────────────────────────────────────────────────
 # Only stb_image_impl.cpp is needed from serial: it provides STB_IMAGE_IMPLEMENTATION

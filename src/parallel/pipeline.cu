@@ -82,7 +82,7 @@ namespace
                   << seconds * 1000.0 << " ms\n";
     }
 
-#if DEBUG_LEVEL >= 1
+#if DEBUG_LEVEL >= 1 || SUB_TIMINGS >= 1
     void print_summary_cuda(const PipelineOptions &options, const PipelineResult &results)
     {
         std::cout << "\n-- CUDA Pipeline output --------------------\n";
@@ -329,7 +329,7 @@ PipelineResult run_cuda(const PipelineOptions &options)
 
     result.timings.total_seconds = total_timer.get();
 
-#if DEBUG_LEVEL >= 1
+#if DEBUG_LEVEL >= 1 || SUB_TIMINGS >= 1
     print_summary_cuda(options, result);
 #endif
 
