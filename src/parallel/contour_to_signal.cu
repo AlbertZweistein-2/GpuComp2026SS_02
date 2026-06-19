@@ -1,5 +1,3 @@
-// Coordinates -> struct of Arrays statt vector of structs
-
 #include <iostream>
 #include <vector>
 #include <set>
@@ -19,6 +17,7 @@
 
 #include "types.hpp"
 #include "parallel/contour_to_signal.cuh"
+#include "helpers.hpp"
 
 // Moore neighbor tracing algorithm to get the vector of contour coordinates
 // Inherently sequential, therefore not parallelizeable
@@ -171,7 +170,7 @@ void simplify_chain_approx_cuda(CoordinateVector<int> &contour)
     contour = std::move(simplified);
 }
 
-struct swap_and_b
+struct swap_ab
 {
     __host__ __device__ Coordinate<int> operator()(const Coordinate<int> &c) const
     {
@@ -196,7 +195,7 @@ void find_contour_chain_approx_simple_cuda(const std::vector<uint8_t> &boundary,
     // finally something to parallelize
     // we need to check if the speedup from parallelizing exceeds the overhead
     thrust::device_vector<Coordinate<int>> d_contour = result;
-    thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_and_b());
+    thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_ab());
     thrust::copy(d_contour.begin(), d_contour.end(), result.begin());
 }
 
@@ -291,6 +290,9 @@ void smooth_contour_cuda(CoordinateVector<int> &points, int window)
         thrust::raw_pointer_cast(d_points.data()),
         thrust::raw_pointer_cast(d_smoothed.data()),
         half_window, n);
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // copying the result back from device to host
     thrust::copy(d_smoothed.begin(), d_smoothed.end(), points.begin());
@@ -412,6 +414,9 @@ void radial_signal_cuda(const CoordinateVector<int> &points, Coordinate<float> c
     int num_blocks = 256;
     // calling the kernel
     radial_signal_kernel<<<num_blocks, threads_per_block>>>(thrust::raw_pointer_cast(d_points.data()), thrust::raw_pointer_cast(d_signal.data()), points.size(), center);
+
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     // copying the result back from device to host
     thrust::copy(d_signal.begin(), d_signal.end(), signal.begin());
