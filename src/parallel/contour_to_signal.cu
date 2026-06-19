@@ -214,10 +214,8 @@ __global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<
     int local_i = threadIdx.x;
 
     // each thread loads one point into shared memory
-    if (i < n)
-    {
-        s_points[local_i + half_window] = points[i];
-    }
+    // wrap with % n so threads beyond the contour end do not leave shared mem uninitialized
+    s_points[local_i + half_window] = points[i % n];
 
     // loading the left and right border points
     // this is for windows that extend beyond the border of the points assigned the the block
@@ -279,10 +277,9 @@ void smooth_contour_cuda(CoordinateVector<int> &points, int window)
     thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
     thrust::device_vector<Coordinate<int>> d_smoothed(n);
 
-    // the many cores lectures taught us that this is a good choice
-    // of threads per block and number of blocks for most GPUs
+    // dynamically determining the number of blocks
     int threads_per_block = 256;
-    int num_blocks = 256;
+    int num_blocks = (n + threads_per_block - 1) / threads_per_block;
     // shared memory must also include the border points on each side
     int shared_mem_size = (threads_per_block + 2 * half_window) * sizeof(Coordinate<int>);
     // calling the kernel
@@ -407,11 +404,9 @@ void radial_signal_cuda(const CoordinateVector<int> &points, Coordinate<float> c
     thrust::device_vector<float> d_signal(points.size());
     thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
 
-    // the many cores lectures taught us that this is a good choice
-    // of threads per block and number of blocks for most GPUs
-    // he said ts often even better than scaling the number of blocks with the number of points
+    // dynamically determining the number of blocks
     int threads_per_block = 256;
-    int num_blocks = 256;
+    int num_blocks = (static_cast<int>(points.size()) + threads_per_block - 1) / threads_per_block;
     // calling the kernel
     radial_signal_kernel<<<num_blocks, threads_per_block>>>(thrust::raw_pointer_cast(d_points.data()), thrust::raw_pointer_cast(d_signal.data()), points.size(), center);
 
