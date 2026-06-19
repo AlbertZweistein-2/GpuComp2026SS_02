@@ -6,9 +6,16 @@
 #define SUB_TIMINGS 0
 #endif
 
+#ifndef PERSIST_TIMINGS
+#define PERSIST_TIMINGS 0
+#endif
+
 #include "serial/pipeline.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <fstream>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -39,7 +46,7 @@ fs::path project_path(const std::string& path)
 template <typename Fn>
 void time_stage(double& seconds, Fn&& fn)
 {
-#if SUB_TIMINGS >= 1
+#if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
     Timer timer;
     timer.reset();
     fn();
@@ -68,9 +75,126 @@ uint8_t* load_rgb_image(const fs::path& path, int& width, int& height)
     return data;
 }
 
+std::string lowercase_extension(const fs::path& path)
+{
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::tolower(ch));
+    });
+    return extension;
+}
+
+bool is_supported_image_file(const fs::path& path)
+{
+    if (!fs::is_regular_file(path)) {
+        return false;
+    }
+
+    const std::string extension = lowercase_extension(path);
+    return extension == ".jpg" ||
+           extension == ".jpeg" ||
+           extension == ".png" ||
+           extension == ".bmp" ||
+           extension == ".tga";
+}
+
+std::vector<fs::path> collect_images(const fs::path& directory)
+{
+    std::vector<fs::path> images;
+    for (const fs::directory_entry& entry : fs::directory_iterator(directory)) {
+        if (is_supported_image_file(entry.path())) {
+            images.push_back(entry.path());
+        }
+    }
+
+    std::sort(images.begin(), images.end());
+    return images;
+}
+
+#if PERSIST_TIMINGS >= 1
+std::string env_or_empty(const char* name)
+{
+    const char* value = std::getenv(name);
+    return value == nullptr ? "" : value;
+}
+
+std::string csv_value_or_fallback(const std::string& value, const std::string& fallback)
+{
+    return value.empty() ? fallback : value;
+}
+
+fs::path timings_csv_path(const PipelineOptions& options)
+{
+    const std::string configured_path = env_or_empty("PIPELINE_TIMINGS_CSV");
+    if (!configured_path.empty()) {
+        return project_path(configured_path);
+    }
+    return project_path(options.output_dir) / "serial_timings.csv";
+}
+
+bool needs_csv_header(const fs::path& path)
+{
+    return !fs::exists(path) || fs::file_size(path) == 0;
+}
+
+double milliseconds(double seconds)
+{
+    return seconds * 1000.0;
+}
+
+std::string image_resolution(int width, int height)
+{
+    return std::to_string(width) + "x" + std::to_string(height);
+}
+
+void append_timings_csv(const PipelineOptions& options, const PipelineResult& result, int width, int height)
+{
+    const fs::path input_path = project_path(options.input_image_path);
+    const fs::path csv_path = timings_csv_path(options);
+    fs::create_directories(csv_path.parent_path());
+
+    const bool write_header = needs_csv_header(csv_path);
+    std::ofstream csv(csv_path, std::ios::app);
+    if (!csv) {
+        throw std::runtime_error("Could not open timings CSV: " + csv_path.string());
+    }
+
+    if (write_header) {
+        csv << "resolution,image,pieces,run,total_ms,preprocessing_ms,"
+            << "connected_components_ms,boundary_extraction_ms,contour_extraction_ms,"
+            << "contour_smoothing_ms,enclosing_circle_ms,radial_signal_ms,"
+            << "signal_smoothing_ms,peak_detection_ms,edge_classification_ms,"
+            << "visualization_ms\n";
+    }
+
+    const std::string pieces = csv_value_or_fallback(
+        env_or_empty("PIPELINE_TIMING_PIECES"),
+        std::to_string(result.pieces.size()));
+    const std::string run = csv_value_or_fallback(env_or_empty("PIPELINE_TIMING_RUN"), "1");
+
+    csv << image_resolution(width, height) << ','
+        << input_path.filename().string() << ','
+        << pieces << ','
+        << run << ','
+        << std::fixed << std::setprecision(3)
+        << milliseconds(result.timings.total_seconds) << ','
+        << milliseconds(result.timings.preprocessing) << ','
+        << milliseconds(result.timings.connected_components) << ','
+        << milliseconds(result.timings.boundary_extraction) << ','
+        << milliseconds(result.timings.contour_extraction) << ','
+        << milliseconds(result.timings.contour_smoothing) << ','
+        << milliseconds(result.timings.enclosing_circle) << ','
+        << milliseconds(result.timings.radial_signal) << ','
+        << milliseconds(result.timings.signal_smoothing) << ','
+        << milliseconds(result.timings.peak_detection) << ','
+        << milliseconds(result.timings.edge_classification) << ','
+        << milliseconds(result.timings.visualization) << '\n';
+}
+#endif
+
 } // namespace
 
-#if DEBUG_LEVEL >= 1 || SUB_TIMINGS >= 1
+#if DEBUG_LEVEL >= 1
 void print_summary(const PipelineOptions& options, const PipelineResult& results)
 {
     const auto print_timing = [](const char* label, double seconds) {
@@ -110,7 +234,7 @@ void print_summary(const PipelineOptions& options, const PipelineResult& results
 
     std::cout << "\n-- Timings -------------------------------\n";
     print_timing("Total wall time", results.timings.total_seconds);
-#if SUB_TIMINGS >= 1
+#if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
     std::vector<std::pair<std::string_view, double>> stage_timings = {
         {"Preprocessing", results.timings.preprocessing},
         {"Connected components", results.timings.connected_components},
@@ -180,16 +304,6 @@ PipelineResult run(const PipelineOptions& options)
     result.pieces.reserve(regions.size());
     const PuzzleLookupTable puzzle_lookup;
 
-    // Some debugging happening here
-    std::cout << "Number of puzzle pieces detected: " << regions.size() << '\n';
-    for (const auto& region : regions) {
-        std::cout << "  Label: " << region.label
-                  << ", Area: " << region.area
-                  << ", Bounding box: (" << region.x << ", " << region.y
-                  << "), Width: " << region.width
-                  << ", Height: " << region.height
-                  << '\n';
-    }
 
     for (const auto& region : regions) {
         ImageU8 piece_boundary;
@@ -282,7 +396,11 @@ PipelineResult run(const PipelineOptions& options)
 
     result.timings.total_seconds = total_timer.get();
 
-#if DEBUG_LEVEL >= 1 || SUB_TIMINGS >= 1
+#if PERSIST_TIMINGS >= 1
+    append_timings_csv(options, result, width, height);
+#endif
+
+#if DEBUG_LEVEL >= 1
     print_summary(options, result);
 #endif
 
@@ -301,7 +419,26 @@ int main(int argc, char** argv)
     }
 
     try {
-        (void)run(options);
+        const fs::path input_path = project_path(options.input_image_path);
+
+        if (fs::is_directory(input_path)) {
+            const std::vector<fs::path> images = collect_images(input_path);
+            if (images.empty()) {
+                throw std::runtime_error("No supported images found in folder: " + input_path.string());
+            }
+
+            debug_print("Running pipeline on " + std::to_string(images.size()) +
+                        " image(s) in: " + input_path.string());
+            for (const fs::path& image_path : images) {
+                PipelineOptions image_options = options;
+                image_options.input_image_path = image_path.string();
+                (void)run(image_options);
+            }
+        } else if (fs::is_regular_file(input_path)) {
+            (void)run(options);
+        } else {
+            throw std::runtime_error("Input path is not a file or folder: " + input_path.string());
+        }
         return 0;
     } catch (const std::exception& e) {
         std::cerr << "Pipeline failed: " << e.what() << '\n';
