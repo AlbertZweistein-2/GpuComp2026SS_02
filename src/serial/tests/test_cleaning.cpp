@@ -81,43 +81,6 @@ void test_morphological_open()
 
 // ______________________________________________________________________________________________
 
-void test_get_external_boundary_mask()
-{
-    std::cout << "Running test_get_external_boundary_mask..." << std::endl;
-
-    ImageU8 image;
-    image.width = 6;
-    image.height = 6;
-    image.data = {
-        0,   0,   0,   0,   0,   0,
-        0, 255, 255, 255, 255,   0,
-        0, 255, 255, 255, 255,   0,
-        0, 255, 255, 255, 255,   0,
-        0, 255, 255, 255, 255,   0,
-        0,   0,   0,   0,   0,   0
-    };
-
-    ImageU8 expected;
-    expected.width = 6;
-    expected.height = 6;
-    expected.data = {
-        0,   0,   0,   0,   0,   0,
-        0, 255, 255, 255, 255,   0,
-        0, 255,   0,   0, 255,   0,
-        0, 255,   0,   0, 255,   0,
-        0, 255, 255, 255, 255,   0,
-        0,   0,   0,   0,   0,   0
-    };
-
-    ImageU8 result;
-    get_external_boundary_mask(image, result);
-
-    assert(result.data == expected.data && "test_get_external_boundary_mask failed!");
-    std::cout << "test_get_external_boundary_mask passed!" << std::endl;
-}
-
-// ______________________________________________________________________________________________
-
 void test_connected_components()
 {
     std::cout << "Running test_connected_components..." << std::endl;
@@ -208,7 +171,6 @@ void test_extract_piece_mask()
 int main()
 {
     test_morphological_open();
-    test_get_external_boundary_mask();
     test_connected_components();
     test_extract_piece_mask();
 

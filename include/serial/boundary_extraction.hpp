@@ -2,11 +2,6 @@
 
 #include "types.hpp"
 
-void get_external_boundary_mask(
-    const ImageU8& input,
-    ImageU8 &boundary
-);
-
 void get_piece_boundary_mask_from_labels(
     const ImageI32& labels,
     const Region& region,
