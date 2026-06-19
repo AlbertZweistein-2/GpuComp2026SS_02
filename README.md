@@ -4,6 +4,12 @@ TU Wien — GPU Architecture & Computing, SS2026, Group 2.
 
 Eight-stage computer vision pipeline that detects and classifies jigsaw puzzle pieces in digital images. Implemented as a serial C++ baseline and a parallel CUDA variant.
 
+| Input | Output |
+|:-----:|:------:|
+| ![input](docs/single_input.jpg) | ![output](docs/single_output.png) |
+
+## Team
+
 ## Team
 
 | Name | GitHub | Task |
