@@ -11,14 +11,28 @@
 
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
-#include <thrust/reduce.h>
 #include <thrust/extrema.h>
-#include <thrust/transform.h>
+#include <thrust/functional.h>
+#include <thrust/transform_reduce.h>
 #include <thrust/copy.h>
 
 #include "types.hpp"
 #include "parallel/contour_to_signal.cuh"
 #include "helpers.hpp"
+
+static void copy_contour_to_device(
+    const CoordinateVector<int> &points,
+    thrust::device_vector<Coordinate<int>> &d_points)
+{
+    // Moore tracing still produces the contour on the host. Resizing a reused
+    // device_vector keeps its capacity when possible, avoiding fresh allocation
+    // for the common case where consecutive pieces have similar contour sizes.
+    d_points.resize(points.size());
+    if (!points.empty())
+    {
+        thrust::copy(points.begin(), points.end(), d_points.begin());
+    }
+}
 
 // Moore neighbor tracing algorithm to get the vector of contour coordinates.
 // This part is intentionally sequential: every next point depends on the
@@ -137,14 +151,6 @@ void simplify_chain_approx_cuda(CoordinateVector<int> &contour)
     contour = std::move(simplified);
 }
 
-struct swap_ab
-{
-    __host__ __device__ Coordinate<int> operator()(const Coordinate<int> &c) const
-    {
-        return Coordinate<int>{c.b, c.a};
-    }
-};
-
 void find_contour_chain_approx_simple_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
 {
     trace_contour_cuda(boundary, width, height, result);
@@ -152,9 +158,10 @@ void find_contour_chain_approx_simple_cuda(const uint8_t *boundary, int width, i
 
     // The tracing code stores points as (row, column). Swap them back to
     // (x, y) like the serial implementation and the original Python code.
-    thrust::device_vector<Coordinate<int>> d_contour = result;
-    thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_ab());
-    thrust::copy(d_contour.begin(), d_contour.end(), result.begin());
+    for (Coordinate<int> &point : result)
+    {
+        std::swap(point.a, point.b);
+    }
 }
 
 void find_contour_chain_approx_simple_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
@@ -222,23 +229,26 @@ __global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<
 }
 
 // moving average smoothing of the contour points vector
-void smooth_contour_cuda(CoordinateVector<int> &points, int window)
+void smooth_contour_cuda(CoordinateVector<int> &points, int window, ContourCudaScratch &scratch)
 {
     // in case the contour is empty
     // or the window size is too small or too large
     const int n = static_cast<int>(points.size());
     if (points.empty() || window <= 1 || window >= n)
     {
+        // Downstream stages read scratch.points, so keep the device-side
+        // contour consistent even when no smoothing kernel is launched.
+        copy_contour_to_device(points, scratch.points);
         return;
     }
 
     // the smoothed contour vector will be the same size as the original
     int half_window = window / 2;
 
-    // using thrust to create device vectors
-    // so we do not need to manually free the memory afterwards, thrust takes care of that
-    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
-    thrust::device_vector<Coordinate<int>> d_smoothed(n);
+    // Reuse device buffers across pieces instead of allocating fresh vectors
+    // in every downstream CUDA stage.
+    copy_contour_to_device(points, scratch.points);
+    scratch.smoothed.resize(static_cast<std::size_t>(n));
 
     // dynamically determining the number of blocks
     int threads_per_block = 256;
@@ -247,15 +257,24 @@ void smooth_contour_cuda(CoordinateVector<int> &points, int window)
     int shared_mem_size = (threads_per_block + 2 * half_window) * sizeof(Coordinate<int>);
     // calling the kernel
     moving_average_kernel<<<num_blocks, threads_per_block, shared_mem_size>>>(
-        thrust::raw_pointer_cast(d_points.data()),
-        thrust::raw_pointer_cast(d_smoothed.data()),
+        thrust::raw_pointer_cast(scratch.points.data()),
+        thrust::raw_pointer_cast(scratch.smoothed.data()),
         half_window, n);
 
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     // copying the result back from device to host
-    thrust::copy(d_smoothed.begin(), d_smoothed.end(), points.begin());
+    // This copy synchronizes with the kernel on the default stream.
+    thrust::copy(scratch.smoothed.begin(), scratch.smoothed.end(), points.begin());
+    // The smoothed contour becomes the active device contour for the circle
+    // approximation and radial-signal kernel.
+    scratch.points.swap(scratch.smoothed);
+}
+
+void smooth_contour_cuda(CoordinateVector<int> &points, int window)
+{
+    ContourCudaScratch scratch;
+    smooth_contour_cuda(points, window, scratch);
 }
 
 // ______________________________________________________________________________________________
@@ -296,18 +315,20 @@ struct square_distance
     }
 };
 
-// Calculates the center and radius of a circle that encloses the contour points
-void enclosing_circle_approx_cuda(const CoordinateVector<int> &points, Coordinate<float> &center, float &radius)
+static void enclosing_circle_approx_device_cuda(
+    const thrust::device_vector<Coordinate<int>> &d_points,
+    Coordinate<float> &center,
+    float &radius)
 {
-    if (points.empty())
+    // Shared implementation for both APIs:
+    // - the legacy overload uploads a host contour first,
+    // - the scratch overload reuses the already-smoothed device contour.
+    if (d_points.empty())
     {
         center = {0.0f, 0.0f};
         radius = 0.0f;
         return;
     }
-
-    // copying the contour points to the device
-    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
 
     // finding the min and max x and y coordinates of the contour points in parallel
     auto minmax_x = thrust::minmax_element(d_points.begin(), d_points.end(), compare_x());
@@ -339,6 +360,18 @@ void enclosing_circle_approx_cuda(const CoordinateVector<int> &points, Coordinat
     radius = sqrtf(max_sq_dist);
 }
 
+// Calculates the center and radius of a circle that encloses the contour points
+void enclosing_circle_approx_cuda(const CoordinateVector<int> &points, Coordinate<float> &center, float &radius)
+{
+    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
+    enclosing_circle_approx_device_cuda(d_points, center, radius);
+}
+
+void enclosing_circle_approx_cuda(const ContourCudaScratch &scratch, Coordinate<float> &center, float &radius)
+{
+    enclosing_circle_approx_device_cuda(scratch.points, center, radius);
+}
+
 // ______________________________________________________________________________________________
 
 // Finally a real custom cuda kernel
@@ -358,24 +391,50 @@ __global__ void radial_signal_kernel(const Coordinate<int> *points, float *signa
     }
 }
 
-// Calculates a vector of distances from the center, one for each contour point
-void radial_signal_cuda(const CoordinateVector<int> &points, Coordinate<float> center, Signal &signal)
+static void radial_signal_device_cuda(
+    const thrust::device_vector<Coordinate<int>> &d_points,
+    Coordinate<float> center,
+    Signal &signal,
+    thrust::device_vector<float> &d_signal)
 {
-    signal.resize(points.size());
-    // using thrust to create device vectors
-    // so we do not need to manually free the memory afterwards, thrust takes care of that
-    thrust::device_vector<float> d_signal(points.size());
-    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
+    // Keep the device output in a reusable buffer, but still copy the signal
+    // back because peak filtering and edge classification currently run on CPU.
+    const int n = static_cast<int>(d_points.size());
+    signal.resize(static_cast<std::size_t>(n));
+    if (n == 0)
+    {
+        d_signal.clear();
+        return;
+    }
+
+    d_signal.resize(static_cast<std::size_t>(n));
 
     // dynamically determining the number of blocks
     int threads_per_block = 256;
-    int num_blocks = (static_cast<int>(points.size()) + threads_per_block - 1) / threads_per_block;
+    int num_blocks = (n + threads_per_block - 1) / threads_per_block;
     // calling the kernel
-    radial_signal_kernel<<<num_blocks, threads_per_block>>>(thrust::raw_pointer_cast(d_points.data()), thrust::raw_pointer_cast(d_signal.data()), points.size(), center);
+    radial_signal_kernel<<<num_blocks, threads_per_block>>>(
+        thrust::raw_pointer_cast(d_points.data()),
+        thrust::raw_pointer_cast(d_signal.data()),
+        n,
+        center);
 
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     // copying the result back from device to host
+    // This copy synchronizes with the kernel on the default stream.
     thrust::copy(d_signal.begin(), d_signal.end(), signal.begin());
+}
+
+// Calculates a vector of distances from the center, one for each contour point
+void radial_signal_cuda(const CoordinateVector<int> &points, Coordinate<float> center, Signal &signal)
+{
+    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
+    thrust::device_vector<float> d_signal;
+    radial_signal_device_cuda(d_points, center, signal, d_signal);
+}
+
+void radial_signal_cuda(ContourCudaScratch &scratch, Coordinate<float> center, Signal &signal)
+{
+    radial_signal_device_cuda(scratch.points, center, signal, scratch.signal);
 }

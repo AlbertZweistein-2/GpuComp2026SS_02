@@ -408,6 +408,12 @@ PipelineResult run_cuda(const PipelineOptions &options)
             piece_boundaries,
             piece_boundary_data); });
 
+    ContourCudaScratch contour_scratch;
+    SignalCudaScratch signal_scratch;
+    CoordinateVector<int> smoothed_contour;
+    Signal raw_radial_signal;
+    Signal smoothed_radial_signal;
+
     for (std::size_t region_idx = 0; region_idx < regions.size(); ++region_idx)
     {
         const Region &region = regions[region_idx];
@@ -433,13 +439,12 @@ PipelineResult run_cuda(const PipelineOptions &options)
                 point.b += piece_boundary.image_offset.b;
             } });
 
-        CoordinateVector<int> smoothed_contour;
         // STEP 6: Smooth contour before signal extraction
         debug_print("[cuda pipeline] smoothing contour: " + std::to_string(region.label));
         time_stage("Contour smoothing", result.timings.contour_smoothing, [&]()
                    {
             smoothed_contour = piece.contour;
-            smooth_contour_cuda(smoothed_contour, CONTOUR_SMOOTHING_WINDOW); });
+            smooth_contour_cuda(smoothed_contour, CONTOUR_SMOOTHING_WINDOW, contour_scratch); });
 
         Coordinate<float> circle_center{0.0f, 0.0f};
         // STEP 7: Approximate enclosing circle center
@@ -447,27 +452,28 @@ PipelineResult run_cuda(const PipelineOptions &options)
         time_stage("Enclosing circle", result.timings.enclosing_circle, [&]()
                    {
             float radius = 0.0f;
-            enclosing_circle_approx_cuda(smoothed_contour, circle_center, radius); });
+            enclosing_circle_approx_cuda(contour_scratch, circle_center, radius); });
 
-        Signal raw_radial_signal;
         // STEP 8: Convert contour to radial signal
         debug_print("[cuda pipeline] calculating radial signal: " + std::to_string(region.label));
         time_stage("Radial signal", result.timings.radial_signal, [&]()
-                   { radial_signal_cuda(smoothed_contour, circle_center, raw_radial_signal); });
+                   { radial_signal_cuda(contour_scratch, circle_center, raw_radial_signal); });
 
-        Signal smoothed_radial_signal;
         // STEP 9: Smooth radial signal for corner detection
         debug_print("[cuda pipeline] smoothing signal: " + std::to_string(region.label));
         time_stage("Signal smoothing", result.timings.signal_smoothing, [&]()
-                   { smoothed_radial_signal = smooth_signal_cuda(
-                         raw_radial_signal,
-                         PEAK_SMOOTHING_WINDOW); });
+                   { smooth_signal_cuda(
+                         contour_scratch.signal,
+                         PEAK_SMOOTHING_WINDOW,
+                         smoothed_radial_signal,
+                         signal_scratch); });
 
         // STEP 10: Detect the four corner peaks
         debug_print("[cuda pipeline] detecting peaks: " + std::to_string(region.label));
         time_stage("Peak detection", result.timings.peak_detection, [&]()
                    { piece.corner_indices = find_triangular_peaks_cuda(
                          smoothed_radial_signal,
+                         signal_scratch,
                          PEAK_MIN_PROMINENCE,
                          PEAK_MIN_SHARPNESS,
                          PEAK_MIN_DISTANCE); });

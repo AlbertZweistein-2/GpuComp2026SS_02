@@ -3,16 +3,47 @@
 #include <array>
 #include <string>
 
+#include <thrust/device_vector.h>
+
 #include "types.hpp"
+
+struct SignalCudaScratch
+{
+    thrust::device_vector<float> input;
+    // Device copy of the smoothed signal. Peak detection reuses this instead
+    // of uploading the same host signal again.
+    thrust::device_vector<float> smoothed;
+    thrust::device_vector<int> peak_mask;
+    thrust::device_vector<int> peak_candidates;
+};
 
 // inherently sequential, identical to serial implementation
 Signal smooth_signal_cuda(
     const Signal &signal,
     int k);
 
+void smooth_signal_cuda(
+    const Signal &signal,
+    int k,
+    Signal &smoothed,
+    SignalCudaScratch &scratch);
+
+void smooth_signal_cuda(
+    const thrust::device_vector<float> &d_signal,
+    int k,
+    Signal &smoothed,
+    SignalCudaScratch &scratch);
+
 // partially parallelized via thrust for local maxima finding
 Corners find_triangular_peaks_cuda(
     const Signal &smooth,
+    float min_prominence,
+    float min_sharpness,
+    int min_distance);
+
+Corners find_triangular_peaks_cuda(
+    const Signal &smooth,
+    SignalCudaScratch &scratch,
     float min_prominence,
     float min_sharpness,
     int min_distance);

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "serial/pipeline.hpp"
+#include "types.hpp"
 
 namespace parallel_visualization {
 

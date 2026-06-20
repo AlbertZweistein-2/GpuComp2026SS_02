@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "serial/pipeline.hpp"
+#include "types.hpp"
 
 // Draws contour (red), bounding box (light green), and label + edge type string (blue)
 // onto a copy of the input RGB image.

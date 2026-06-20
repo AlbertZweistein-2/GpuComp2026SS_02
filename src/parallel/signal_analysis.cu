@@ -68,33 +68,84 @@ namespace
         float val;
     };
 
-    std::vector<int> find_local_maxima_cuda(const Signal &smooth)
+    void copy_signal_to_device(
+        const Signal &signal,
+        thrust::device_vector<float> &d_signal)
     {
-        const int n = static_cast<int>(smooth.size());
+        // Legacy callers still pass host signals. Reusing d_signal keeps
+        // capacity around instead of allocating a new device vector each call.
+        d_signal.resize(signal.size());
+        if (!signal.empty())
+        {
+            thrust::copy(signal.begin(), signal.end(), d_signal.begin());
+        }
+    }
+
+    void smooth_signal_device_cuda(
+        const thrust::device_vector<float> &d_signal,
+        int k,
+        Signal &smoothed,
+        SignalCudaScratch &scratch)
+    {
+        const int n = static_cast<int>(d_signal.size());
+        smoothed.resize(static_cast<std::size_t>(n));
+        if (n == 0)
+        {
+            scratch.smoothed.clear();
+            return;
+        }
+
+        scratch.smoothed.resize(static_cast<std::size_t>(n));
+        const int pad = k / 2;
+
+        // One thread computes one circular moving-average sample. The result
+        // stays in scratch.smoothed so peak detection can reuse it on device.
+        thrust::transform(
+            thrust::counting_iterator<int>(0),
+            thrust::counting_iterator<int>(n),
+            scratch.smoothed.begin(),
+            MovingAverageOp{thrust::raw_pointer_cast(d_signal.data()), n, k, pad});
+
+        thrust::copy(scratch.smoothed.begin(), scratch.smoothed.end(), smoothed.begin());
+    }
+
+    std::vector<int> find_local_maxima_cuda(
+        const thrust::device_vector<float> &d_smooth,
+        SignalCudaScratch &scratch)
+    {
+        const int n = static_cast<int>(d_smooth.size());
         if (n < 3)
         {
             return {};
         }
 
-        thrust::device_vector<float> d_smooth(smooth.begin(), smooth.end());
-        thrust::device_vector<int> d_mask(static_cast<std::size_t>(n));
+        scratch.peak_mask.resize(static_cast<std::size_t>(n));
+        scratch.peak_candidates.resize(static_cast<std::size_t>(n));
 
+        // First build a 0/1 maxima mask, then compact the selected indices.
+        // This is still a GPU prefilter; prominence/sharpness filtering remains
+        // on CPU because it walks variable-length neighborhoods.
         thrust::transform(
             thrust::counting_iterator<int>(0),
             thrust::counting_iterator<int>(n),
-            d_mask.begin(),
+            scratch.peak_mask.begin(),
             IsLocalMaxOp{thrust::raw_pointer_cast(d_smooth.data()), n});
 
-        thrust::device_vector<int> d_candidates(static_cast<std::size_t>(n));
         auto end = thrust::copy_if(
             thrust::counting_iterator<int>(0),
             thrust::counting_iterator<int>(n),
-            d_candidates.begin(),
-            MaskIsSet{thrust::raw_pointer_cast(d_mask.data())});
-        d_candidates.resize(static_cast<std::size_t>(end - d_candidates.begin()));
+            scratch.peak_candidates.begin(),
+            MaskIsSet{thrust::raw_pointer_cast(scratch.peak_mask.data())});
+        const std::size_t candidate_count = static_cast<std::size_t>(end - scratch.peak_candidates.begin());
 
-        std::vector<int> candidates(d_candidates.size());
-        thrust::copy(d_candidates.begin(), d_candidates.end(), candidates.begin());
+        std::vector<int> candidates(candidate_count);
+        if (candidate_count > 0)
+        {
+            thrust::copy(
+                scratch.peak_candidates.begin(),
+                scratch.peak_candidates.begin() + static_cast<std::ptrdiff_t>(candidate_count),
+                candidates.begin());
+        }
         return candidates;
     }
 
@@ -102,29 +153,50 @@ namespace
 
 Signal smooth_signal_cuda(const Signal &signal, int k)
 {
-    const int n = static_cast<int>(signal.size());
-    Signal smoothed(static_cast<std::size_t>(n));
-    if (n == 0)
-    {
-        return smoothed;
-    }
-
-    thrust::device_vector<float> d_signal(signal.begin(), signal.end());
-    thrust::device_vector<float> d_smoothed(static_cast<std::size_t>(n));
-    const int pad = k / 2;
-
-    thrust::transform(
-        thrust::counting_iterator<int>(0),
-        thrust::counting_iterator<int>(n),
-        d_smoothed.begin(),
-        MovingAverageOp{thrust::raw_pointer_cast(d_signal.data()), n, k, pad});
-
-    thrust::copy(d_smoothed.begin(), d_smoothed.end(), smoothed.begin());
+    Signal smoothed;
+    SignalCudaScratch scratch;
+    smooth_signal_cuda(signal, k, smoothed, scratch);
     return smoothed;
+}
+
+void smooth_signal_cuda(
+    const Signal &signal,
+    int k,
+    Signal &smoothed,
+    SignalCudaScratch &scratch)
+{
+    copy_signal_to_device(signal, scratch.input);
+    smooth_signal_device_cuda(scratch.input, k, smoothed, scratch);
+}
+
+void smooth_signal_cuda(
+    const thrust::device_vector<float> &d_signal,
+    int k,
+    Signal &smoothed,
+    SignalCudaScratch &scratch)
+{
+    smooth_signal_device_cuda(d_signal, k, smoothed, scratch);
 }
 
 Corners find_triangular_peaks_cuda(
     const Signal &smooth,
+    float min_prominence,
+    float min_sharpness,
+    int min_distance)
+{
+    SignalCudaScratch scratch;
+    copy_signal_to_device(smooth, scratch.smoothed);
+    return find_triangular_peaks_cuda(
+        smooth,
+        scratch,
+        min_prominence,
+        min_sharpness,
+        min_distance);
+}
+
+Corners find_triangular_peaks_cuda(
+    const Signal &smooth,
+    SignalCudaScratch &scratch,
     float min_prominence,
     float min_sharpness,
     int min_distance)
@@ -136,7 +208,12 @@ Corners find_triangular_peaks_cuda(
         return final_corners;
     }
 
-    const std::vector<int> candidates = find_local_maxima_cuda(smooth);
+    if (scratch.smoothed.size() != smooth.size())
+    {
+        copy_signal_to_device(smooth, scratch.smoothed);
+    }
+
+    const std::vector<int> candidates = find_local_maxima_cuda(scratch.smoothed, scratch);
     auto wrap = [n](int i)
     { return ((i % n) + n) % n; };
 

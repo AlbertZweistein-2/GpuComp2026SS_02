@@ -1,5 +1,5 @@
 #pragma once
 
-#include "serial/pipeline.hpp"
+#include "types.hpp"
 
 PipelineResult run_cuda(const PipelineOptions& options = PipelineOptions{});

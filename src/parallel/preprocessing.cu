@@ -363,7 +363,6 @@ void preprocess_cuda(
         d_cleaned_ptr,
         width,
         height);
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     CUDA_CHECK(cudaFree(d_temp));
     CUDA_CHECK(cudaFree(d_gray));

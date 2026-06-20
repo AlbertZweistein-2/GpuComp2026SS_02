@@ -478,7 +478,6 @@ void connected_components_buf_cuda_device(
         width,
         height);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 void build_regions_from_labels_cuda(
@@ -551,7 +550,6 @@ void build_regions_from_labels_cuda(
         slot_count,
         min_area);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     int region_count = 0;
     CUDA_CHECK(cudaMemcpy(
