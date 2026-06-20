@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <thrust/device_vector.h>
+
 #include "types.hpp"
 
 struct PieceBoundaryMask
@@ -14,10 +16,21 @@ struct PieceBoundaryMask
     Coordinate<int> image_offset;
 };
 
-void get_piece_boundary_masks_from_labels_cuda(
+struct PieceBoundaryPointBatch
+{
+    std::vector<PieceBoundaryMask> boundaries;
+    thrust::device_vector<int> point_offsets;
+    thrust::device_vector<int> point_counts;
+    thrust::device_vector<Coordinate<int>> points;
+};
+
+void extract_piece_boundary_points_from_labels_cuda(
     const int *d_labels,
     const std::vector<Region> &regions,
     int image_width,
     int image_height,
-    std::vector<uint8_t> &boundary_data,
-    std::vector<PieceBoundaryMask> &boundaries);
+    PieceBoundaryPointBatch &batch);
+
+void copy_boundary_points_to_masks_host(
+    const PieceBoundaryPointBatch &batch,
+    std::vector<uint8_t> &boundary_data);

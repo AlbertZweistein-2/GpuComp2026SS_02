@@ -394,18 +394,23 @@ PipelineResult run_cuda(const PipelineOptions &options)
     const PuzzleLookupTable puzzle_lookup;
 
     std::vector<uint8_t> piece_boundary_data;
-    std::vector<PieceBoundaryMask> piece_boundaries;
+    PieceBoundaryPointBatch piece_boundary_points;
 
-    // STEP 4: Extract all cropped piece boundaries from the compact label image
+    // STEP 4: Extract all piece boundary points from the compact label image
     debug_print("[cuda pipeline] extracting piece boundaries");
     time_stage("Boundary extraction", result.timings.boundary_extraction, [&]()
-               { get_piece_boundary_masks_from_labels_cuda(
-                     d_compact_labels_ptr,
-                     regions,
-                     width,
-                     height,
-                     piece_boundary_data,
-                     piece_boundaries); });
+               {
+        extract_piece_boundary_points_from_labels_cuda(
+            d_compact_labels_ptr,
+            regions,
+            width,
+            height,
+            piece_boundary_points);
+        copy_boundary_points_to_masks_host(
+            piece_boundary_points,
+            piece_boundary_data); });
+
+    const std::vector<PieceBoundaryMask> &piece_boundaries = piece_boundary_points.boundaries;
 
     for (std::size_t region_idx = 0; region_idx < regions.size(); ++region_idx)
     {
