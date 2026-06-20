@@ -16,6 +16,7 @@
 #   DEBUG   – 1 = pipeline log output  (default: 0)
 #   TIMINGS – 1 = sub-stage timing measurement (default: 1)
 #   PERSIST_TIMINGS – 1 = append timings to CSV (default: 0)
+#   NVTX    – 1 = emit Nsight Systems stage ranges (default: 0)
 #   OUT     – output binary path       (default: build/pipeline_cuda)
 
 set -euo pipefail
@@ -26,6 +27,7 @@ ARCH=${ARCH:-sm_75}
 DEBUG=${DEBUG:-0}
 TIMINGS=${TIMINGS:-1}
 PERSIST_TIMINGS=${PERSIST_TIMINGS:-0}
+NVTX=${NVTX:-0}
 OUT=${OUT:-build/pipeline_cuda}
 
 # ── Compile definitions ───────────────────────────────────────────────────────
@@ -33,6 +35,7 @@ DEFS="-DCUDA_PIPELINE_BUILD_STANDALONE"
 [ "${DEBUG}"   = "1" ] && DEFS="${DEFS} -DDEBUG_LEVEL=1"
 [ "${TIMINGS}" = "1" ] && DEFS="${DEFS} -DSUB_TIMINGS=1"
 [ "${PERSIST_TIMINGS}" = "1" ] && DEFS="${DEFS} -DPERSIST_TIMINGS=1"
+[ "${NVTX}" = "1" ] && DEFS="${DEFS} -DENABLE_NVTX=1"
 
 # ── Source files ──────────────────────────────────────────────────────────────
 # Only stb_image_impl.cpp is needed from serial: it provides STB_IMAGE_IMPLEMENTATION
@@ -42,6 +45,7 @@ SRCS=(
     src/parallel/boundary_extraction.cu
     src/parallel/cleaning.cu
     src/parallel/component_labeling.cu
+    src/parallel/component_labeling_buf.cu
     src/parallel/contour_to_signal.cu
     src/parallel/preprocessing.cu
     src/parallel/signal_analysis.cu
@@ -53,7 +57,7 @@ SRCS=(
 mkdir -p "$(dirname "${OUT}")"
 
 echo "Building CUDA pipeline"
-echo "  NVCC=${NVCC}  ARCH=${ARCH}  OPT=${OPT}  DEBUG=${DEBUG}  TIMINGS=${TIMINGS}  PERSIST_TIMINGS=${PERSIST_TIMINGS}"
+echo "  NVCC=${NVCC}  ARCH=${ARCH}  OPT=${OPT}  DEBUG=${DEBUG}  TIMINGS=${TIMINGS}  PERSIST_TIMINGS=${PERSIST_TIMINGS}  NVTX=${NVTX}"
 echo "  Output: ${OUT}"
 
 ${NVCC} \

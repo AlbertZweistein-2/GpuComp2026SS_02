@@ -90,7 +90,7 @@ __global__ void dilate_kernel(
     output[y * width + x] = any_foreground ? 255 : 0;
 }
 
-void erode_cuda_device(
+static void erode_cuda_device(
     const uint8_t *d_input,
     uint8_t *d_output,
     int width,
@@ -109,7 +109,7 @@ void erode_cuda_device(
     CUDA_CHECK(cudaGetLastError());
 }
 
-void dilate_cuda_device(
+static void dilate_cuda_device(
     const uint8_t *d_input,
     uint8_t *d_output,
     int width,

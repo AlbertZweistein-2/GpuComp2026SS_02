@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -30,10 +31,47 @@ __global__ void init_labels_kernel(
     labels[idx] = (binary[idx] > 0) ? idx + 1 : 0;
 }
 
-__global__ void propagate_labels_kernel(
+__device__ __forceinline__ int find_root_label(
+    int *labels,
+    int label)
+{
+    int parent = labels[label - 1];
+    while (parent != label)
+    {
+        int grandparent = labels[parent - 1];
+        labels[label - 1] = grandparent;
+        label = parent;
+        parent = grandparent;
+    }
+
+    return label;
+}
+
+__device__ void union_label_roots(
+    int *labels,
+    int a,
+    int b)
+{
+    while (true)
+    {
+        a = find_root_label(labels, a);
+        b = find_root_label(labels, b);
+
+        if (a == b)
+            return;
+
+        int high = a > b ? a : b;
+        int low = a < b ? a : b;
+
+        int old = atomicCAS(&labels[high - 1], high, low);
+        if (old == high)
+            return;
+    }
+}
+
+__global__ void union_neighbor_labels_kernel(
     const uint8_t *binary,
     int *labels,
-    int *changed,
     int width,
     int height)
 {
@@ -47,33 +85,45 @@ __global__ void propagate_labels_kernel(
     if (binary[idx] == 0 || labels[idx] == 0)
         return;
 
-    int current = labels[idx];
-    int min_label = current;
+    int label = labels[idx];
 
-    for (int dy = -1; dy <= 1; ++dy)
+    if (x + 1 < width && binary[idx + 1] > 0)
     {
-        for (int dx = -1; dx <= 1; ++dx)
-        {
-            if (dx == 0 && dy == 0)
-                continue;
-
-            int nx = x + dx;
-            int ny = y + dy;
-            if (nx < 0 || nx >= width || ny < 0 || ny >= height)
-                continue;
-
-            int nidx = ny * width + nx;
-            if (binary[nidx] > 0 && labels[nidx] > 0)
-            {
-                min_label = min_label < labels[nidx] ? min_label : labels[nidx];
-            }
-        }
+        union_label_roots(labels, label, labels[idx + 1]);
     }
 
-    if (min_label < current)
+    if (y + 1 < height)
     {
-        labels[idx] = min_label;
-        *changed = 1;
+        int down = idx + width;
+        if (binary[down] > 0)
+        {
+            union_label_roots(labels, label, labels[down]);
+        }
+
+        if (x > 0 && binary[down - 1] > 0)
+        {
+            union_label_roots(labels, label, labels[down - 1]);
+        }
+
+        if (x + 1 < width && binary[down + 1] > 0)
+        {
+            union_label_roots(labels, label, labels[down + 1]);
+        }
+    }
+}
+
+__global__ void compress_labels_kernel(
+    int *labels,
+    int total_pixels)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total_pixels)
+        return;
+
+    int label = labels[idx];
+    if (label > 0)
+    {
+        labels[idx] = find_root_label(labels, label);
     }
 }
 
@@ -169,10 +219,9 @@ void init_labels_cuda_device(
     init_labels_kernel<<<grid, block>>>(d_binary, d_labels, width, height);
 }
 
-void propagate_labels_cuda_device(
+void union_labels_cuda_device(
     const uint8_t *d_binary,
     int *d_labels,
-    int *d_changed,
     int width,
     int height)
 {
@@ -181,7 +230,16 @@ void propagate_labels_cuda_device(
         (width + block.x - 1) / block.x,
         (height + block.y - 1) / block.y);
 
-    propagate_labels_kernel<<<grid, block>>>(d_binary, d_labels, d_changed, width, height);
+    union_neighbor_labels_kernel<<<grid, block>>>(d_binary, d_labels, width, height);
+}
+
+void compress_labels_cuda_device(
+    int *d_labels,
+    int total_pixels)
+{
+    int block = 256;
+    int grid = (total_pixels + block - 1) / block;
+    compress_labels_kernel<<<grid, block>>>(d_labels, total_pixels);
 }
 
 void count_component_area_cuda_device(
@@ -215,32 +273,15 @@ void connected_components_cuda_device_raw(
     int min_area,
     int max_label_count)
 {
+    (void)d_changed;
+    (void)d_areas;
+    (void)min_area;
+    (void)max_label_count;
     const int total_pixels = width * height;
 
     init_labels_cuda_device(d_binary, d_labels, width, height);
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    int h_changed = 1;
-    int iterations = 0;
-    const int max_iterations = width + height;
-
-    while (h_changed && iterations < max_iterations)
-    {
-        h_changed = 0;
-        CUDA_CHECK(cudaMemcpy(d_changed, &h_changed, sizeof(int), cudaMemcpyHostToDevice));
-
-        propagate_labels_cuda_device(d_binary, d_labels, d_changed, width, height);
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        CUDA_CHECK(cudaMemcpy(&h_changed, d_changed, sizeof(int), cudaMemcpyDeviceToHost));
-        ++iterations;
-    }
-
-    cudaMemset(d_areas, 0, static_cast<size_t>(max_label_count) * sizeof(int));
-    count_component_area_cuda_device(d_labels, d_areas, total_pixels);
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    filter_small_components_cuda_device(d_labels, d_areas, min_area, total_pixels);
+    union_labels_cuda_device(d_binary, d_labels, width, height);
+    compress_labels_cuda_device(d_labels, total_pixels);
     CUDA_CHECK(cudaDeviceSynchronize());
 }
 
@@ -254,23 +295,24 @@ int connected_components_cuda_device(
     const int total_pixels = width * height;
 
     thrust::device_vector<int> d_labels(static_cast<size_t>(total_pixels));
-    thrust::device_vector<int> d_changed(1);
-    thrust::device_vector<int> d_areas(static_cast<size_t>(total_pixels) + 1);
 
     connected_components_cuda_device_raw(
         d_binary,
         thrust::raw_pointer_cast(d_labels.data()),
-        thrust::raw_pointer_cast(d_changed.data()),
-        thrust::raw_pointer_cast(d_areas.data()),
+        nullptr,
+        nullptr,
         width,
         height,
         min_area,
         total_pixels + 1);
 
-    return compact_labels_cuda_device(
-        thrust::raw_pointer_cast(d_labels.data()),
+    CUDA_CHECK(cudaMemcpy(
         d_compact_labels,
-        total_pixels);
+        thrust::raw_pointer_cast(d_labels.data()),
+        static_cast<size_t>(total_pixels) * sizeof(int),
+        cudaMemcpyDeviceToDevice));
+
+    return 0;
 }
 
 int compact_labels_cuda_device(
@@ -321,7 +363,7 @@ void build_regions_from_labels_cuda(
     const int *d_compact_labels,
     int width,
     int height,
-    int num_components,
+    int min_area,
     std::vector<Region> &regions)
 {
     const int total_pixels = width * height;
@@ -333,50 +375,66 @@ void build_regions_from_labels_cuda(
         static_cast<size_t>(total_pixels) * sizeof(int),
         cudaMemcpyDeviceToHost));
 
-    regions.reserve(static_cast<size_t>(num_components));
+    regions.clear();
 
-    for (int label = 1; label <= num_components; ++label)
+    std::unordered_map<int, size_t> label_to_region;
+
+    for (int y = 0; y < height; ++y)
     {
-        Region r;
-        r.label = label;
-        r.area = 0;
-        r.x = width;
-        r.y = height;
-        r.width = 0;
-        r.height = 0;
-
-        int max_x = -1;
-        int max_y = -1;
-
-        for (int y = 0; y < height; ++y)
+        for (int x = 0; x < width; ++x)
         {
-            for (int x = 0; x < width; ++x)
+            const int idx = y * width + x;
+            const int label = h_labels[idx];
+            if (label == 0)
             {
-                const int idx = y * width + x;
-                if (h_labels[idx] != label)
-                {
-                    continue;
-                }
+                continue;
+            }
 
-                ++r.area;
-                if (x < r.x)
-                    r.x = x;
-                if (y < r.y)
-                    r.y = y;
-                if (x > max_x)
-                    max_x = x;
-                if (y > max_y)
-                    max_y = y;
+            auto [it, inserted] = label_to_region.emplace(label, regions.size());
+            if (inserted)
+            {
+                regions.push_back(Region{label, 0, x, y, 1, 1});
+            }
+
+            Region &region = regions[it->second];
+            ++region.area;
+
+            const int max_x = region.x + region.width - 1;
+            const int max_y = region.y + region.height - 1;
+
+            if (x < region.x)
+            {
+                region.width = max_x - x + 1;
+                region.x = x;
+            }
+            else if (x > max_x)
+            {
+                region.width = x - region.x + 1;
+            }
+
+            if (y < region.y)
+            {
+                region.height = max_y - y + 1;
+                region.y = y;
+            }
+            else if (y > max_y)
+            {
+                region.height = y - region.y + 1;
             }
         }
-
-        if (r.area > 0)
-        {
-            r.width = max_x - r.x + 1;
-            r.height = max_y - r.y + 1;
-            regions.push_back(r);
-        }
     }
+
+    std::sort(regions.begin(), regions.end(), [](const Region &a, const Region &b)
+              {
+                  if (a.y != b.y)
+                      return a.y < b.y;
+                  return a.x < b.x;
+              });
+
+    regions.erase(
+        std::remove_if(regions.begin(), regions.end(), [min_area](const Region &region)
+                       { return region.area < min_area; }),
+        regions.end());
 }
 
 __global__ void extract_piece_mask_kernel(

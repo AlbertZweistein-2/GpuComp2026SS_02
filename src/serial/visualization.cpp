@@ -14,6 +14,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iostream>
 #include <cstddef>
@@ -190,6 +191,31 @@ void draw_text(std::vector<uint8_t>& img, int img_width, int img_height,
     }
 }
 
+bool has_extension(const std::string& path, const std::string& extension)
+{
+    if (path.size() < extension.size())
+    {
+        return false;
+    }
+
+    return std::equal(extension.rbegin(), extension.rend(), path.rbegin(),
+                      [](char expected, char actual)
+                      {
+                          return std::tolower(static_cast<unsigned char>(expected)) ==
+                                 std::tolower(static_cast<unsigned char>(actual));
+                      });
+}
+
+int write_overlay_image(const std::string& output_path, int width, int height, const std::vector<uint8_t>& img)
+{
+    if (has_extension(output_path, ".bmp"))
+    {
+        return stbi_write_bmp(output_path.c_str(), width, height, 3, img.data());
+    }
+
+    return stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
+}
+
 // ______________________________________________________________________________________________
 
 void draw_piece_overlays(
@@ -225,8 +251,9 @@ void draw_piece_overlays(
         std::cerr << "[visualization] warning: font file not found: " << font_path << '\n';
 
 
-    for (const PuzzlePiece& piece : pieces)
+    for (size_t piece_idx = 0; piece_idx < pieces.size(); ++piece_idx)
     {
+        const PuzzlePiece& piece = pieces[piece_idx];
         const Region& region = piece.region;
         const CoordinateVector<int>& contour = piece.contour;
 
@@ -251,7 +278,7 @@ void draw_piece_overlays(
         // drawing the label text in white above the bounding box
         std::string piece_label;
         piece_label = piece.class_label;
-        std::string text = "Piece " + std::to_string(region.label) + " ; Class " + piece_label;
+        std::string text = "Piece " + std::to_string(piece_idx + 1) + " ; Class " + piece_label;
         // positioning the text above the bounding box with some padding
         int text_y = std::max(0, region.y - static_cast<int>(label_font_size + label_padding));
         int text_x = std::max(0, region.x - static_cast<int>(padding_left));
@@ -260,9 +287,8 @@ void draw_piece_overlays(
     }
 
     // saving output image if path is provided
-    // most time is spent here, unfortunately stbi_write_png is serial
     if (!output_path.empty())
     {
-        stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
+        write_overlay_image(output_path, width, height, img);
     }
 }

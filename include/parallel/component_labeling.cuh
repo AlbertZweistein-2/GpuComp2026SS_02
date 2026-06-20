@@ -11,12 +11,15 @@ void init_labels_cuda_device(
     int width,
     int height);
 
-void propagate_labels_cuda_device(
+void union_labels_cuda_device(
     const uint8_t *d_binary,
     int *d_labels,
-    int *d_changed,
     int width,
     int height);
+
+void compress_labels_cuda_device(
+    int *d_labels,
+    int total_pixels);
 
 void count_component_area_cuda_device(
     const int *d_labels,
@@ -55,7 +58,21 @@ void build_regions_from_labels_cuda(
     const int *d_compact_labels,
     int width,
     int height,
-    int num_components,
+    int min_area,
+    std::vector<Region> &regions);
+
+int connected_components_buf_cuda_device(
+    const uint8_t *d_binary,
+    int *d_compact_labels,
+    int width,
+    int height,
+    int min_area);
+
+void build_regions_from_labels_buf_cuda(
+    const int *d_compact_labels,
+    int width,
+    int height,
+    int min_area,
     std::vector<Region> &regions);
 
 // extracts the binary mask for a single puzzle piece by label

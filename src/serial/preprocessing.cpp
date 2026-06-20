@@ -213,9 +213,6 @@ void preprocess(
         int height,
         int ksize,
         float sigma,
-        int morphology_kernel_width,
-        int morphology_kernel_height,
-        int morphology_iterations,
         ImageU8& result)
 {
     result.width = width;
@@ -250,6 +247,5 @@ void preprocess(
     binary_image.height = height;
     binary_image.data = std::move(binary);
 
-    const ImageU8 morphology_kernel = make_kernel(morphology_kernel_width, morphology_kernel_height);
-    morphological_open(binary_image, morphology_kernel, result, morphology_iterations);
+    morphological_open(binary_image, result);
 }

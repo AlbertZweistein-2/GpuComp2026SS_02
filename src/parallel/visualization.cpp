@@ -1,11 +1,16 @@
 #include "parallel/visualization.hpp"
 
+#ifndef ENABLE_NVTX
+#define ENABLE_NVTX 0
+#endif
+
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "stb_truetype.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iostream>
 #include <cstddef>
@@ -13,6 +18,10 @@
 #include <vector>
 
 #include "types.hpp"
+
+#if ENABLE_NVTX >= 1
+#include <nvtx3/nvToolsExt.h>
+#endif
 
 // not using CUDA here, overhead would likely dominate
 // only using OpenMP to parallelize drawing each piece
@@ -23,6 +32,28 @@
 // ______________________________________________________________________________________________
 
 namespace {
+
+#if ENABLE_NVTX >= 1
+class NvtxRange
+{
+public:
+    explicit NvtxRange(const char* label)
+    {
+        nvtxRangePushA(label);
+    }
+
+    ~NvtxRange()
+    {
+        nvtxRangePop();
+    }
+};
+#else
+class NvtxRange
+{
+public:
+    explicit NvtxRange(const char*) {}
+};
+#endif
 
 // sets a single pixel in the RGB image
 inline void set_pixel(std::vector<uint8_t>& img, int width, int height,
@@ -190,6 +221,33 @@ void draw_text(std::vector<uint8_t>& img, int img_width, int img_height,
     }
 }
 
+bool has_extension(const std::string& path, const std::string& extension)
+{
+    if (path.size() < extension.size())
+    {
+        return false;
+    }
+
+    return std::equal(extension.rbegin(), extension.rend(), path.rbegin(),
+                      [](char expected, char actual)
+                      {
+                          return std::tolower(static_cast<unsigned char>(expected)) ==
+                                 std::tolower(static_cast<unsigned char>(actual));
+                      });
+}
+
+int write_overlay_image(const std::string& output_path, int width, int height, const std::vector<uint8_t>& img)
+{
+    if (has_extension(output_path, ".bmp"))
+    {
+        NvtxRange range("Visualization: write BMP");
+        return stbi_write_bmp(output_path.c_str(), width, height, 3, img.data());
+    }
+
+    NvtxRange range("Visualization: write PNG");
+    return stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
+}
+
 // ______________________________________________________________________________________________
 
 } // namespace
@@ -210,7 +268,11 @@ void draw_piece_overlays(
 
     // working on a copy so we dont modify the original image
     const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-    std::vector<uint8_t> img(rgb_data, rgb_data + pixel_count);
+    std::vector<uint8_t> img;
+    {
+        NvtxRange range("Visualization: copy input");
+        img.assign(rgb_data, rgb_data + pixel_count);
+    }
 
     // only loading the font once, not for every piece
     const std::string font_path = "data/fonts/DejaVuSans.ttf";
@@ -218,60 +280,65 @@ void draw_piece_overlays(
     std::vector<uint8_t> font_data;
     stbtt_fontinfo font_info;
     bool font_loaded = false;
-    if (font_file.is_open()) {
-        std::streamsize size = font_file.tellg();
-        font_file.seekg(0, std::ios::beg);
-        font_data.resize(static_cast<size_t>(size));
-        font_file.read(reinterpret_cast<char*>(font_data.data()), size);
-        font_loaded = stbtt_InitFont(&font_info, font_data.data(), 0);
+    {
+        NvtxRange range("Visualization: load font");
+        if (font_file.is_open()) {
+            std::streamsize size = font_file.tellg();
+            font_file.seekg(0, std::ios::beg);
+            font_data.resize(static_cast<size_t>(size));
+            font_file.read(reinterpret_cast<char*>(font_data.data()), size);
+            font_loaded = stbtt_InitFont(&font_info, font_data.data(), 0);
+        }
     }
     if (!font_loaded)
         std::cerr << "[visualization] warning: font file not found: " << font_path << '\n';
 
-    // Use OpenMP when enabled; writing the PNG remains serial.
+    // Use OpenMP when enabled; writing the image remains serial.
+    {
+        NvtxRange range("Visualization: draw overlays");
 #ifdef _OPENMP
 #pragma omp parallel for
 #endif
-    for (std::ptrdiff_t piece_idx = 0; piece_idx < static_cast<std::ptrdiff_t>(pieces.size()); ++piece_idx)
-    {
-        const PuzzlePiece& piece = pieces[static_cast<size_t>(piece_idx)];
-        const Region& region = piece.region;
-        const CoordinateVector<int>& contour = piece.contour;
-
-        // drawing the contour in red
-        // contour points are (x, y) again after the coordinate swap in find_contour_chain_approx_simple
-        for (size_t i = 0; i < contour.size(); ++i)
+        for (std::ptrdiff_t piece_idx = 0; piece_idx < static_cast<std::ptrdiff_t>(pieces.size()); ++piece_idx)
         {
-            // connecting consecutive points in the contour with lines
-            // wrapping around to close the contour
-            size_t next = (i + 1) % contour.size();
-            draw_line(img, width, height,
-                      contour[i].a,    contour[i].b,
-                      contour[next].a, contour[next].b,
-                      255, 0, 0);
+            const PuzzlePiece& piece = pieces[static_cast<size_t>(piece_idx)];
+            const Region& region = piece.region;
+            const CoordinateVector<int>& contour = piece.contour;
+
+            // drawing the contour in red
+            // contour points are (x, y) again after the coordinate swap in find_contour_chain_approx_simple
+            for (size_t i = 0; i < contour.size(); ++i)
+            {
+                // connecting consecutive points in the contour with lines
+                // wrapping around to close the contour
+                size_t next = (i + 1) % contour.size();
+                draw_line(img, width, height,
+                          contour[i].a,    contour[i].b,
+                          contour[next].a, contour[next].b,
+                          255, 0, 0);
+            }
+
+            // drawing the bounding box in light green
+            draw_rect(img, width, height,
+                      region.x, region.y, region.width, region.height,
+                      144, 238, 144, 2);
+
+            // drawing the label text in white above the bounding box
+            std::string piece_label;
+            piece_label = piece.class_label;
+            std::string text = "Piece " + std::to_string(piece_idx + 1) + " ; Class " + piece_label;
+            // positioning the text above the bounding box with some padding
+            int text_y = std::max(0, region.y - static_cast<int>(label_font_size + label_padding));
+            int text_x = std::max(0, region.x - static_cast<int>(padding_left));
+            if (font_loaded)
+                draw_text(img, width, height, text, text_x, text_y, label_font_size, 255, 255, 255, font_info);
         }
-
-        // drawing the bounding box in light green
-        draw_rect(img, width, height,
-                  region.x, region.y, region.width, region.height,
-                  144, 238, 144, 2);
-
-        // drawing the label text in white above the bounding box
-        std::string piece_label;
-        piece_label = piece.class_label;
-        std::string text = "Piece " + std::to_string(region.label) + " ; Class " + piece_label;
-        // positioning the text above the bounding box with some padding
-        int text_y = std::max(0, region.y - static_cast<int>(label_font_size + label_padding));
-        int text_x = std::max(0, region.x - static_cast<int>(padding_left));
-        if (font_loaded)
-            draw_text(img, width, height, text, text_x, text_y, label_font_size, 255, 255, 255, font_info);
     }
 
     // saving output image if path is provided
-    // most time is spent here, unfortunately stbi_write_png is serial
     if (!output_path.empty())
     {
-        stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
+        write_overlay_image(output_path, width, height, img);
     }
 }
 

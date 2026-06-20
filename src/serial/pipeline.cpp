@@ -37,6 +37,23 @@ namespace fs = std::filesystem;
 
 namespace {
 
+constexpr int GAUSSIAN_KERNEL_SIZE = 5;
+constexpr float GAUSSIAN_SIGMA = 1.0f;
+constexpr int MIN_REGION_AREA = 2000;
+constexpr int CONTOUR_SMOOTHING_WINDOW = 5;
+constexpr int PEAK_SMOOTHING_WINDOW = 5;
+constexpr float PEAK_MIN_PROMINENCE = 5.0f;
+constexpr float PEAK_MIN_SHARPNESS = 20.0f;
+constexpr int PEAK_MIN_DISTANCE = 5;
+constexpr float EDGE_TOL_FACTOR = 0.1f;
+constexpr double REFERENCE_IMAGE_HEIGHT = 5100.0;
+
+int scaled_min_region_area(int height)
+{
+    const double scale = static_cast<double>(height) / REFERENCE_IMAGE_HEIGHT;
+    return std::max(1, static_cast<int>(MIN_REGION_AREA * scale * scale + 0.5));
+}
+
 fs::path project_path(const std::string& path)
 {
     fs::path p(path);
@@ -160,7 +177,7 @@ void append_timings_csv(const PipelineOptions& options, const PipelineResult& re
     }
 
     if (write_header) {
-        csv << "resolution,image,pieces,run,total_ms,preprocessing_ms,"
+        csv << "resolution,image,pieces,run,total_ms,image_loading_ms,preprocessing_ms,"
             << "connected_components_ms,boundary_extraction_ms,contour_extraction_ms,"
             << "contour_smoothing_ms,enclosing_circle_ms,radial_signal_ms,"
             << "signal_smoothing_ms,peak_detection_ms,edge_classification_ms,"
@@ -178,6 +195,7 @@ void append_timings_csv(const PipelineOptions& options, const PipelineResult& re
         << run << ','
         << std::fixed << std::setprecision(3)
         << milliseconds(result.timings.total_seconds) << ','
+        << milliseconds(result.timings.image_loading) << ','
         << milliseconds(result.timings.preprocessing) << ','
         << milliseconds(result.timings.connected_components) << ','
         << milliseconds(result.timings.boundary_extraction) << ','
@@ -236,6 +254,7 @@ void print_summary(const PipelineOptions& options, const PipelineResult& results
     print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
     std::vector<std::pair<std::string_view, double>> stage_timings = {
+        {"Image loading", results.timings.image_loading},
         {"Preprocessing", results.timings.preprocessing},
         {"Connected components", results.timings.connected_components},
         {"Boundary extraction", results.timings.boundary_extraction},
@@ -275,8 +294,12 @@ PipelineResult run(const PipelineOptions& options)
     debug_print("[pipeline] loading image: " + input_image_path.string());
     int width = 0;
     int height = 0;
-    uint8_t* rgb = load_rgb_image(input_image_path, width, height);
+    uint8_t* rgb = nullptr;
+    time_stage(result.timings.image_loading, [&]() {
+        rgb = load_rgb_image(input_image_path, width, height);
+    });
     ImageU8 cleaned;
+    const int min_region_area = scaled_min_region_area(height);
 
     // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[pipeline] preprocessing");
@@ -285,11 +308,8 @@ PipelineResult run(const PipelineOptions& options)
             rgb,
             width,
             height,
-            options.gaussian_kernel_size,
-            options.gaussian_sigma,
-            options.morphology_kernel_width,
-            options.morphology_kernel_height,
-            options.morphology_iterations,
+            GAUSSIAN_KERNEL_SIZE,
+            GAUSSIAN_SIGMA,
             cleaned);
     });
     ImageI32 labels;
@@ -297,7 +317,7 @@ PipelineResult run(const PipelineOptions& options)
     // STEP 3: Label connected components and collect piece regions
     debug_print("[pipeline] connected components");
     time_stage(result.timings.connected_components, [&]() {
-        connected_components(cleaned, options.min_region_area, labels, regions);
+        connected_components(cleaned, min_region_area, labels, regions);
     });
     debug_print("[pipeline] found " + std::to_string(regions.size()) + " regions");
 
@@ -336,7 +356,7 @@ PipelineResult run(const PipelineOptions& options)
         debug_print("[pipeline] smoothing contour: " + std::to_string(region.label));
         time_stage(result.timings.contour_smoothing, [&]() {
             smoothed_contour = piece.contour;
-            smooth_contour(smoothed_contour, options.contour_smoothing_window);
+            smooth_contour(smoothed_contour, CONTOUR_SMOOTHING_WINDOW);
         });
 
         Coordinate<float> circle_center{0.0f, 0.0f};
@@ -358,7 +378,7 @@ PipelineResult run(const PipelineOptions& options)
         // STEP 9: Smooth radial signal for corner detection
         debug_print("[pipeline] smoothing signal: " + std::to_string(region.label));
         time_stage(result.timings.signal_smoothing, [&]() {
-            smoothed_radial_signal = smooth_signal(raw_radial_signal, options.peak_smoothing_window);
+            smoothed_radial_signal = smooth_signal(raw_radial_signal, PEAK_SMOOTHING_WINDOW);
         });
 
         // STEP 10: Detect the four corner peaks
@@ -366,9 +386,9 @@ PipelineResult run(const PipelineOptions& options)
         time_stage(result.timings.peak_detection, [&]() {
             piece.corner_indices = find_triangular_peaks(
                 smoothed_radial_signal,
-                options.peak_min_prominence,
-                options.peak_min_sharpness,
-                options.peak_min_distance);
+                PEAK_MIN_PROMINENCE,
+                PEAK_MIN_SHARPNESS,
+                PEAK_MIN_DISTANCE);
         });
 
         // STEP 11: Classify edge types and lookup piece class
@@ -377,7 +397,7 @@ PipelineResult run(const PipelineOptions& options)
             piece.edge_labels = classify_edges(
                 raw_radial_signal,
                 piece.corner_indices,
-                options.tol_factor);
+                EDGE_TOL_FACTOR);
             const std::string edge_label_string = edges_to_string(piece.edge_labels);
             piece.class_label = puzzle_lookup.getClassLabel(edge_label_string);
         });
@@ -389,7 +409,7 @@ PipelineResult run(const PipelineOptions& options)
     time_stage(result.timings.visualization, [&]() {
         const fs::path output_dir = project_path(options.output_dir);
         fs::create_directories(output_dir);
-        const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.png");
+        const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.bmp");
         draw_piece_overlays(rgb, width, height, result.pieces, overlay_path.string());
     });
     stbi_image_free(rgb);

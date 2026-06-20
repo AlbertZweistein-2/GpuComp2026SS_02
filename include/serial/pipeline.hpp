@@ -10,6 +10,7 @@
 #include "types.hpp"
 
 struct PipelineTimings {
+    double image_loading = 0.0;
     double preprocessing = 0.0;
     double connected_components = 0.0;
     double boundary_extraction = 0.0;
@@ -27,24 +28,6 @@ struct PipelineTimings {
 struct PipelineOptions {
     std::string input_image_path = "data/single.JPG";
     std::string output_dir = "data/pipeline_output";
-
-    int gaussian_kernel_size = 5;
-    float gaussian_sigma = 1.0f;
-
-    int morphology_kernel_width = 4;
-    int morphology_kernel_height = 4;
-    int morphology_iterations = 2;
-
-    int min_region_area = 2000;
-
-    int contour_smoothing_window = 5;
-
-    int peak_smoothing_window = 5;
-    float peak_min_prominence = 5.0f;
-    float peak_min_sharpness = 20.0f;
-    int peak_min_distance = 5;
-
-    float tol_factor = 0.1f;
 };
 
 struct PuzzlePiece {

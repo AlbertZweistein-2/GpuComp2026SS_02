@@ -10,8 +10,5 @@ void preprocess(
     int height,
     int ksize,
     float sigma,
-    int morphology_kernel_width,
-    int morphology_kernel_height,
-    int morphology_iterations,
     ImageU8& result
 );

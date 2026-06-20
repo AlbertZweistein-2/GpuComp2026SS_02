@@ -9,48 +9,6 @@
 
 // ______________________________________________________________________________________________
 
-void test_erode()
-{
-    std::cout << "Running test_erode..." << std::endl;
-
-    ImageU8 image;
-    image.width = 6;
-    image.height = 6;
-    image.data = {
-        0,   0,   0,   0,   0,   0,
-        0, 255, 255, 255, 255,   0,
-        0, 255, 255, 255, 255,   0,
-        0, 255, 255, 255, 255,   0,
-        0, 255, 255, 255, 255,   0,
-        0,   0,   0,   0,   0,   0
-    };
-
-    ImageU8 kernel;
-    kernel.width = 3;
-    kernel.height = 3;
-    kernel.data = { 1,1,1, 1,1,1, 1,1,1 };
-
-    ImageU8 expected;
-    expected.width = 6;
-    expected.height = 6;
-    expected.data = {
-        0, 0,   0,   0,   0, 0,
-        0, 0,   0,   0,   0, 0,
-        0, 0, 255, 255,   0, 0,
-        0, 0, 255, 255,   0, 0,
-        0, 0,   0,   0,   0, 0,
-        0, 0,   0,   0,   0, 0
-    };
-
-    ImageU8 result;
-    morphological_open(image, kernel, result, 0); // erode only via open with 0 iterations? 
-    // TODO: adjust if erode() is exposed directly in cleaning.hpp
-    assert(result.data == expected.data && "test_erode failed!");
-    std::cout << "test_erode passed!" << std::endl;
-}
-
-// ______________________________________________________________________________________________
-
 void test_morphological_open()
 {
     std::cout << "Running test_morphological_open..." << std::endl;
@@ -67,15 +25,15 @@ void test_morphological_open()
         0,   0,   0,   0,   0,   0
     };
 
-    ImageU8 kernel;
-    kernel.width = 3;
-    kernel.height = 3;
-    kernel.data = { 1,1,1, 1,1,1, 1,1,1 };
+    ImageU8 expected;
+    expected.width = 6;
+    expected.height = 6;
+    expected.data.assign(36, 0);
 
     ImageU8 result;
-    morphological_open(image, kernel, result, 1);
+    morphological_open(image, result);
 
-    assert(result.data == image.data && "test_morphological_open failed!");
+    assert(result.data == expected.data && "test_morphological_open failed!");
     std::cout << "test_morphological_open passed!" << std::endl;
 }
 

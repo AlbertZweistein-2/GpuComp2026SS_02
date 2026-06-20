@@ -1,5 +1,23 @@
 #include "serial/cleaning.hpp"
 
+#include <cstddef>
+
+namespace
+{
+constexpr int MORPH_KERNEL_WIDTH = 5;
+constexpr int MORPH_KERNEL_HEIGHT = 5;
+constexpr int MORPH_ITERATIONS = 1;
+
+ImageU8 make_kernel(int width, int height)
+{
+    ImageU8 kernel;
+    kernel.width = width;
+    kernel.height = height;
+    kernel.data.assign(static_cast<std::size_t>(width) * height, 1);
+    return kernel;
+}
+} // namespace
+
 static void erode(const ImageU8 &image, const ImageU8 &kernel, ImageU8 &result, int iterations)
 {
     result = image;
@@ -18,7 +36,7 @@ static void erode(const ImageU8 &image, const ImageU8 &kernel, ImageU8 &result, 
         ImageU8 new_image;
         new_image.width = width;
         new_image.height = height;
-        new_image.data.resize(static_cast<size_t>(width) * height, 0);
+        new_image.data.resize(static_cast<std::size_t>(width) * height, 0);
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
 
@@ -77,7 +95,7 @@ static void dilate(const ImageU8 &image, const ImageU8 &kernel, ImageU8 &result,
         ImageU8 new_image;
         new_image.width = width;
         new_image.height = height;
-        new_image.data.resize(static_cast<size_t>(width) * height, 0);
+        new_image.data.resize(static_cast<std::size_t>(width) * height, 0);
 
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
@@ -117,9 +135,10 @@ static void dilate(const ImageU8 &image, const ImageU8 &kernel, ImageU8 &result,
     }
 }
 
-void morphological_open(const ImageU8 &image, const ImageU8 &kernel, ImageU8 &result, int iterations)
+void morphological_open(const ImageU8 &image, ImageU8 &result)
 {
+    const ImageU8 kernel = make_kernel(MORPH_KERNEL_WIDTH, MORPH_KERNEL_HEIGHT);
     ImageU8 eroded;
-    erode(image, kernel, eroded, iterations);
-    dilate(eroded, kernel, result, iterations);
+    erode(image, kernel, eroded, MORPH_ITERATIONS);
+    dilate(eroded, kernel, result, MORPH_ITERATIONS);
 }

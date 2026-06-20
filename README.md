@@ -50,9 +50,10 @@ Build flags:
 | `DEBUG` | `0` | enable verbose logging |
 | `TIMINGS` | `1` | measure per-stage runtimes |
 | `PERSIST_TIMINGS` | `0` | append timing results to CSV |
+| `NVTX` | `0` | emit Nsight Systems stage ranges |
 | `ARCH` | `sm_75` | CUDA target architecture|
 
-Example: `TIMINGS=1 DEBUG=0 ./build_cuda.sh`
+Example: `TIMINGS=1 DEBUG=0 NVTX=1 ./build_cuda.sh`
 
 ## Run
 
@@ -66,6 +67,12 @@ Example: `TIMINGS=1 DEBUG=0 ./build_cuda.sh`
 
 ```bash
 ./build/pipeline_cuda data/1_p1.jpg data/pipeline_output
+```
+
+#### CUDA profiling
+
+```bash
+./profile_cuda.sh data/single.JPG test_output
 ```
 
 ## Cluster Access
