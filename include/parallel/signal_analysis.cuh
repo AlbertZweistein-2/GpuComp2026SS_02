@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string>
+#include <vector>
 
 #include <thrust/device_vector.h>
 
@@ -9,55 +10,48 @@
 
 struct SignalCudaScratch
 {
-    thrust::device_vector<float> input;
-    // Device copy of the smoothed signal. Peak detection reuses this instead
-    // of uploading the same host signal again.
+    // Device copy of the smoothed batched signal. Peak detection reuses this
+    // directly instead of uploading host signal data again.
     thrust::device_vector<float> smoothed;
+    // Local-maxima mask reused by batched peak detection.
     thrust::device_vector<int> peak_mask;
-    thrust::device_vector<int> peak_candidates;
 };
 
-// inherently sequential, identical to serial implementation
-Signal smooth_signal_cuda(
-    const Signal &signal,
-    int k);
-
-void smooth_signal_cuda(
-    const Signal &signal,
-    int k,
-    Signal &smoothed,
-    SignalCudaScratch &scratch);
-
-void smooth_signal_cuda(
+// Smooths all radial signal slices in one launch using contour offsets/lengths.
+void smooth_signals_batched_cuda(
     const thrust::device_vector<float> &d_signal,
+    const thrust::device_vector<int> &offsets,
+    const thrust::device_vector<int> &lengths,
+    int max_length,
     int k,
     Signal &smoothed,
     SignalCudaScratch &scratch);
 
-// partially parallelized via thrust for local maxima finding
-Corners find_triangular_peaks_cuda(
+// Partially parallelized: local maxima are found on GPU, peak filtering stays on CPU.
+void find_triangular_peaks_batched_cuda(
     const Signal &smooth,
-    float min_prominence,
-    float min_sharpness,
-    int min_distance);
-
-Corners find_triangular_peaks_cuda(
-    const Signal &smooth,
+    const thrust::device_vector<float> &d_smooth,
+    const std::vector<int> &offsets,
+    const std::vector<int> &lengths,
+    const thrust::device_vector<int> &d_offsets,
+    const thrust::device_vector<int> &d_lengths,
+    int max_length,
     SignalCudaScratch &scratch,
     float min_prominence,
     float min_sharpness,
-    int min_distance);
+    int min_distance,
+    std::vector<Corners> &corners);
 
-// inherently sequential, identical to serial implementation
-char edge_char_cuda(EdgeType e);
-
-// inherently sequential, identical to serial implementation
-EdgeLabels classify_edges_cuda(
+// Batched CPU classification over flat radial signal slices.
+void classify_edges_batched_cuda(
     const Signal &raw,
-    const Corners &corners,
-    float tol_factor);
+    const std::vector<int> &offsets,
+    const std::vector<int> &lengths,
+    const std::vector<Corners> &corners,
+    float tol_factor,
+    std::vector<EdgeLabels> &labels);
 
-// inherently sequential, identical to serial implementation
+// Inherently sequential, identical to serial implementation.
 std::string edges_to_string_cuda(const EdgeLabels &labels);
 
 class PuzzleLookupTable

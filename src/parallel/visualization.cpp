@@ -56,7 +56,7 @@ public:
 #endif
 
 // sets a single pixel in the RGB image
-inline void set_pixel(std::vector<uint8_t>& img, int width, int height,
+inline void set_pixel(uint8_t* img, int width, int height,
                       int x, int y, uint8_t r, uint8_t g, uint8_t b)
 {
     // if pixel is out of bounds, do nothing
@@ -79,7 +79,7 @@ inline void set_pixel(std::vector<uint8_t>& img, int width, int height,
 // draws a line between two points with minimal error
 // inherently serial, but probably not necessary to parallelize for this application
 // GPU overhead would likely dominate
-void draw_line(std::vector<uint8_t>& img, int width, int height,
+void draw_line(uint8_t* img, int width, int height,
                int x0, int y0, int x1, int y1,
                uint8_t r, uint8_t g, uint8_t b)
 {
@@ -143,7 +143,7 @@ void draw_line(std::vector<uint8_t>& img, int width, int height,
 
 // draws a rectangle outline with given thickness
 // just using four lines
-void draw_rect(std::vector<uint8_t>& img, int width, int height,
+void draw_rect(uint8_t* img, int width, int height,
                int x, int y, int w, int h,
                uint8_t r, uint8_t g, uint8_t b, int thickness = 2)
 {
@@ -161,7 +161,7 @@ void draw_rect(std::vector<uint8_t>& img, int width, int height,
 
 // renders a string into the RGB image using stb_truetype
 // silently skips text rendering if font file cannot be loaded
-void draw_text(std::vector<uint8_t>& img, int img_width, int img_height,
+void draw_text(uint8_t* img, int img_width, int img_height,
                const std::string& text, int x, int y, float font_size,
                uint8_t r, uint8_t g, uint8_t b,
                const stbtt_fontinfo& font)
@@ -240,36 +240,30 @@ bool has_extension(const std::string& path, const std::string& extension)
 
 namespace parallel_visualization {
 
-int write_overlay_image(const std::string& output_path, int width, int height, const std::vector<uint8_t>& img)
+int write_overlay_image(const std::string& output_path, int width, int height, const uint8_t* img)
 {
     if (has_extension(output_path, ".bmp"))
     {
         NvtxRange range("Image store: write BMP");
-        return stbi_write_bmp(output_path.c_str(), width, height, 3, img.data());
+        return stbi_write_bmp(output_path.c_str(), width, height, 3, img);
     }
 
     NvtxRange range("Image store: write PNG");
-    return stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
+    return stbi_write_png(output_path.c_str(), width, height, 3, img, width * 3);
 }
 
-std::vector<uint8_t> render_piece_overlays(
-    const uint8_t* rgb_data,
+void render_piece_overlays(
+    uint8_t* rgb_data,
     int width,
     int height,
     const std::vector<PuzzlePiece>& pieces)
 {
-    //Scaling font size and padding to the image resolution
+    // Draw directly into the loaded RGB image. The CUDA pipeline writes the
+    // overlay immediately afterwards, so keeping an unmodified copy is wasted.
+    // Scaling font size and padding to the image resolution
     const float label_font_size = 50.0f * (static_cast<float>(height) / 5100.0f); // 5100 is the height of the original image used for scaling
     const float label_padding = 8.0f * (static_cast<float>(height) / 5100.0f); // 5100 is the height of the original image used for scaling
     const float padding_left = 16.0f * (static_cast<float>(width) / 5100.0f); // 5100 is the height of the original image used for scaling
-
-    // working on a copy so we dont modify the original image
-    const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
-    std::vector<uint8_t> img;
-    {
-        NvtxRange range("Visualization: copy input");
-        img.assign(rgb_data, rgb_data + pixel_count);
-    }
 
     // only loading the font once, not for every piece
     const std::string font_path = "data/fonts/DejaVuSans.ttf";
@@ -309,14 +303,14 @@ std::vector<uint8_t> render_piece_overlays(
                 // connecting consecutive points in the contour with lines
                 // wrapping around to close the contour
                 size_t next = (i + 1) % contour.size();
-                draw_line(img, width, height,
+                draw_line(rgb_data, width, height,
                           contour[i].a,    contour[i].b,
                           contour[next].a, contour[next].b,
                           255, 0, 0);
             }
 
             // drawing the bounding box in light green
-            draw_rect(img, width, height,
+            draw_rect(rgb_data, width, height,
                       region.x, region.y, region.width, region.height,
                       144, 238, 144, 2);
 
@@ -328,11 +322,9 @@ std::vector<uint8_t> render_piece_overlays(
             int text_y = std::max(0, region.y - static_cast<int>(label_font_size + label_padding));
             int text_x = std::max(0, region.x - static_cast<int>(padding_left));
             if (font_loaded)
-                draw_text(img, width, height, text, text_x, text_y, label_font_size, 255, 255, 255, font_info);
+                draw_text(rgb_data, width, height, text, text_x, text_y, label_font_size, 255, 255, 255, font_info);
         }
     }
-
-    return img;
 }
 
 } // namespace parallel_visualization

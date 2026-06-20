@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstddef>
 #include <cstdlib>
 #include <fstream>
 #include <filesystem>
@@ -220,7 +221,7 @@ namespace
 
         if (write_header)
         {
-            csv << "resolution,image,pieces,run,total_ms,preprocessing_ms,"
+            csv << "resolution,image,pieces,run,total_ms,cuda_setup_ms,preprocessing_ms,"
                 << "connected_components_ms,boundary_extraction_ms,contour_extraction_ms,"
                 << "contour_smoothing_ms,enclosing_circle_ms,radial_signal_ms,"
                 << "signal_smoothing_ms,peak_detection_ms,edge_classification_ms,"
@@ -238,6 +239,7 @@ namespace
             << run << ','
             << std::fixed << std::setprecision(3)
             << milliseconds(result.timings.total_seconds) << ','
+            << milliseconds(result.timings.cuda_setup) << ','
             << milliseconds(result.timings.preprocessing) << ','
             << milliseconds(result.timings.connected_components) << ','
             << milliseconds(result.timings.boundary_extraction) << ','
@@ -300,6 +302,7 @@ namespace
         print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
         std::vector<std::pair<std::string_view, double>> stage_timings = {
+            {"CUDA setup", results.timings.cuda_setup},
             {"Preprocessing", results.timings.preprocessing},
             {"Connected components", results.timings.connected_components},
             {"Boundary extraction", results.timings.boundary_extraction},
@@ -323,6 +326,13 @@ namespace
         {
             print_timing(label.data(), seconds);
         }
+
+        double accounted_seconds = 0.0;
+        for (const auto &[_, seconds] : stage_timings)
+        {
+            accounted_seconds += seconds;
+        }
+        print_timing("Untracked overhead", results.timings.total_seconds - accounted_seconds);
 #else
         std::cout << "  Sub timings disabled; compile with SUB_TIMINGS >= 1 to measure stages.\n";
 #endif
@@ -343,20 +353,26 @@ PipelineResult run_cuda(const PipelineOptions &options)
     int height = 0;
     std::unique_ptr<uint8_t, decltype(&stbi_image_free)> rgb(nullptr, stbi_image_free);
     rgb.reset(load_rgb_image(input_image_path, width, height));
-    
+
     Timer total_timer;
     total_timer.reset();
 
     const int total_pixels = width * height;
     const int min_region_area = scaled_min_region_area(height);
 
-    // Copy rgb image to device memory
-    thrust::device_vector<uint8_t> d_rgb(static_cast<size_t>(total_pixels * 3));
-    thrust::copy(rgb.get(), rgb.get() + total_pixels * 3, d_rgb.begin());
-    thrust::device_vector<uint8_t> d_cleaned(static_cast<size_t>(total_pixels));
-    thrust::device_vector<int> d_compact_labels(static_cast<size_t>(total_pixels));
+    thrust::device_vector<uint8_t> d_rgb;
+    thrust::device_vector<uint8_t> d_cleaned;
+    thrust::device_vector<int> d_compact_labels;
 
-    // Get device Pointers for the device vectors
+    // STEP 1b: Allocate persistent device buffers and upload the input image.
+    debug_print("[cuda pipeline] allocating CUDA buffers and uploading image");
+    time_stage("CUDA setup", result.timings.cuda_setup, [&]()
+               {
+        d_rgb.resize(static_cast<std::size_t>(total_pixels * 3));
+        thrust::copy(rgb.get(), rgb.get() + total_pixels * 3, d_rgb.begin());
+        d_cleaned.resize(static_cast<std::size_t>(total_pixels));
+        d_compact_labels.resize(static_cast<std::size_t>(total_pixels)); });
+
     uint8_t *d_rgb_ptr = thrust::raw_pointer_cast(d_rgb.data());
     uint8_t *d_cleaned_ptr = thrust::raw_pointer_cast(d_cleaned.data());
     int *d_compact_labels_ptr = thrust::raw_pointer_cast(d_compact_labels.data());
@@ -390,7 +406,7 @@ PipelineResult run_cuda(const PipelineOptions &options)
             regions); });
     debug_print("[cuda pipeline] found " + std::to_string(regions.size()) + " regions");
 
-    result.pieces.reserve(regions.size());
+    result.pieces.resize(regions.size());
     const PuzzleLookupTable puzzle_lookup;
 
     std::vector<PieceBoundaryMask> piece_boundaries;
@@ -408,95 +424,131 @@ PipelineResult run_cuda(const PipelineOptions &options)
             piece_boundaries,
             piece_boundary_data); });
 
-    ContourCudaScratch contour_scratch;
     SignalCudaScratch signal_scratch;
-    CoordinateVector<int> smoothed_contour;
-    Signal raw_radial_signal;
-    Signal smoothed_radial_signal;
 
-    for (std::size_t region_idx = 0; region_idx < regions.size(); ++region_idx)
-    {
-        const Region &region = regions[region_idx];
-        const PieceBoundaryMask &piece_boundary = piece_boundaries[region_idx];
-        const uint8_t *piece_boundary_ptr = piece_boundary_data.data() + piece_boundary.data_offset;
+    // STEP 5: Moore tracing stays on CPU because it produces connected contour
+    // order. The later CUDA stages consume these contours as one flat batch.
+    debug_print("[cuda pipeline] extracting contours");
+    time_stage("Contour extraction", result.timings.contour_extraction, [&]()
+               {
+        const std::ptrdiff_t region_count = static_cast<std::ptrdiff_t>(regions.size());
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+        for (std::ptrdiff_t region_idx = 0; region_idx < region_count; ++region_idx)
+        {
+            const std::size_t idx = static_cast<std::size_t>(region_idx);
+            const Region &region = regions[idx];
+            const PieceBoundaryMask &piece_boundary = piece_boundaries[idx];
+            const uint8_t *piece_boundary_ptr = piece_boundary_data.data() + piece_boundary.data_offset;
 
-        PuzzlePiece piece;
-        piece.region = region;
+            PuzzlePiece piece;
+            piece.region = region;
 
-        // STEP 5: Convert host boundary mask to a connected global contour.
-        // This uses Moore tracing again because angle-sorted boundary pixels
-        // were not a valid connected contour for concave puzzle pieces.
-        debug_print("[cuda pipeline] extracting contour: " + std::to_string(region.label));
-        time_stage("Contour extraction", result.timings.contour_extraction, [&]()
-                   {
+            // STEP 5: Convert host boundary mask to a connected global contour.
+            // This uses Moore tracing again because angle-sorted boundary pixels
+            // were not a valid connected contour for concave puzzle pieces.
             find_contour_chain_approx_simple_cuda(
                 piece_boundary_ptr,
                 piece_boundary.width,
                 piece_boundary.height,
                 piece.contour);
-            for (Coordinate<int>& point : piece.contour) {
+            for (Coordinate<int> &point : piece.contour)
+            {
                 point.a += piece_boundary.image_offset.a;
                 point.b += piece_boundary.image_offset.b;
-            } });
+            }
 
-        // STEP 6: Smooth contour before signal extraction
-        debug_print("[cuda pipeline] smoothing contour: " + std::to_string(region.label));
-        time_stage("Contour smoothing", result.timings.contour_smoothing, [&]()
-                   {
-            smoothed_contour = piece.contour;
-            smooth_contour_cuda(smoothed_contour, CONTOUR_SMOOTHING_WINDOW, contour_scratch); });
+            result.pieces[idx] = std::move(piece);
+        } });
 
-        Coordinate<float> circle_center{0.0f, 0.0f};
-        // STEP 7: Approximate enclosing circle center
-        debug_print("[cuda pipeline] approximating enclosing circle: " + std::to_string(region.label));
-        time_stage("Enclosing circle", result.timings.enclosing_circle, [&]()
-                   {
-            float radius = 0.0f;
-            enclosing_circle_approx_cuda(contour_scratch, circle_center, radius); });
+    BatchedContours batched_contours;
+    BatchedContourCudaScratch batched_contour_scratch;
+    // STEP 6: Smooth all contours in one batched GPU launch.
+    debug_print("[cuda pipeline] smoothing contours");
+    time_stage("Contour smoothing", result.timings.contour_smoothing, [&]()
+               {
+        build_batched_contours(result.pieces, batched_contours);
+        smooth_contours_batched_cuda(
+            batched_contours,
+            CONTOUR_SMOOTHING_WINDOW,
+            batched_contour_scratch); });
 
-        // STEP 8: Convert contour to radial signal
-        debug_print("[cuda pipeline] calculating radial signal: " + std::to_string(region.label));
-        time_stage("Radial signal", result.timings.radial_signal, [&]()
-                   { radial_signal_cuda(contour_scratch, circle_center, raw_radial_signal); });
+    std::vector<Coordinate<float>> circle_centers;
+    // STEP 7: Approximate all enclosing circle centers in one batched GPU launch.
+    debug_print("[cuda pipeline] approximating enclosing circles");
+    time_stage("Enclosing circle", result.timings.enclosing_circle, [&]()
+               { enclosing_circle_centers_batched_cuda(
+                     batched_contours,
+                     batched_contour_scratch,
+                     circle_centers); });
 
-        // STEP 9: Smooth radial signal for corner detection
-        debug_print("[cuda pipeline] smoothing signal: " + std::to_string(region.label));
-        time_stage("Signal smoothing", result.timings.signal_smoothing, [&]()
-                   { smooth_signal_cuda(
-                         contour_scratch.signal,
-                         PEAK_SMOOTHING_WINDOW,
-                         smoothed_radial_signal,
-                         signal_scratch); });
+    Signal flat_raw_radial_signal;
+    Signal flat_smoothed_radial_signal;
+    // STEP 8: Convert all smoothed contours to radial signals in one batched GPU launch.
+    debug_print("[cuda pipeline] calculating radial signals");
+    time_stage("Radial signal", result.timings.radial_signal, [&]()
+               { radial_signals_batched_cuda(
+                     batched_contours,
+                     batched_contour_scratch,
+                     flat_raw_radial_signal); });
 
-        // STEP 10: Detect the four corner peaks
-        debug_print("[cuda pipeline] detecting peaks: " + std::to_string(region.label));
-        time_stage("Peak detection", result.timings.peak_detection, [&]()
-                   { piece.corner_indices = find_triangular_peaks_cuda(
-                         smoothed_radial_signal,
-                         signal_scratch,
-                         PEAK_MIN_PROMINENCE,
-                         PEAK_MIN_SHARPNESS,
-                         PEAK_MIN_DISTANCE); });
+    // STEP 9: Smooth all radial signals in one batched GPU launch.
+    debug_print("[cuda pipeline] smoothing signals");
+    time_stage("Signal smoothing", result.timings.signal_smoothing, [&]()
+               { smooth_signals_batched_cuda(
+                     batched_contour_scratch.signals,
+                     batched_contour_scratch.offsets,
+                     batched_contour_scratch.lengths,
+                     batched_contours.max_length,
+                     PEAK_SMOOTHING_WINDOW,
+                     flat_smoothed_radial_signal,
+                     signal_scratch); });
 
-        // STEP 11: Classify edge types and lookup piece class
-        debug_print("[cuda pipeline] classifying edges: " + std::to_string(region.label));
-        time_stage("Edge classification", result.timings.edge_classification, [&]()
-                   {
-            piece.edge_labels = classify_edges_cuda(
-                raw_radial_signal,
-                piece.corner_indices,
-                EDGE_TOL_FACTOR);
+    std::vector<Corners> batched_corner_indices;
+    // STEP 10: Detect corner peaks for all pieces using one batched GPU maxima pass.
+    debug_print("[cuda pipeline] detecting peaks");
+    time_stage("Peak detection", result.timings.peak_detection, [&]()
+               { find_triangular_peaks_batched_cuda(
+                     flat_smoothed_radial_signal,
+                     signal_scratch.smoothed,
+                     batched_contours.offsets,
+                     batched_contours.lengths,
+                     batched_contour_scratch.offsets,
+                     batched_contour_scratch.lengths,
+                     batched_contours.max_length,
+                     signal_scratch,
+                     PEAK_MIN_PROMINENCE,
+                     PEAK_MIN_SHARPNESS,
+                     PEAK_MIN_DISTANCE,
+                     batched_corner_indices); });
+
+    std::vector<EdgeLabels> batched_edge_labels;
+    // STEP 11: Classify all piece edges from the flat radial signal.
+    debug_print("[cuda pipeline] classifying edges");
+    time_stage("Edge classification", result.timings.edge_classification, [&]()
+               {
+        classify_edges_batched_cuda(
+            flat_raw_radial_signal,
+            batched_contours.offsets,
+            batched_contours.lengths,
+            batched_corner_indices,
+            EDGE_TOL_FACTOR,
+            batched_edge_labels);
+
+        for (std::size_t piece_idx = 0; piece_idx < result.pieces.size(); ++piece_idx)
+        {
+            PuzzlePiece &piece = result.pieces[piece_idx];
+            piece.corner_indices = batched_corner_indices[piece_idx];
+            piece.edge_labels = batched_edge_labels[piece_idx];
             const std::string edge_label_string = edges_to_string_cuda(piece.edge_labels);
-            piece.class_label = puzzle_lookup.getClassLabel(edge_label_string); });
-
-        result.pieces.push_back(std::move(piece));
-    }
+            piece.class_label = puzzle_lookup.getClassLabel(edge_label_string);
+        } });
 
     // STEP 12: Draw final contour and bounding-box overlay image
-    std::vector<uint8_t> overlay_image;
     time_stage("Visualization", result.timings.visualization, [&]()
                {
-        overlay_image = parallel_visualization::render_piece_overlays(
+        parallel_visualization::render_piece_overlays(
             rgb.get(),
             width,
             height,
@@ -507,7 +559,7 @@ PipelineResult run_cuda(const PipelineOptions &options)
     const fs::path output_dir = project_path(options.output_dir);
     fs::create_directories(output_dir);
     const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_cuda_overlays.bmp");
-    parallel_visualization::write_overlay_image(overlay_path.string(), width, height, overlay_image);
+    parallel_visualization::write_overlay_image(overlay_path.string(), width, height, rgb.get());
 
 #if PERSIST_TIMINGS >= 1
     append_timings_csv(options, result, width, height);

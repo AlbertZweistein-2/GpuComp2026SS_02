@@ -1,160 +1,145 @@
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <set>
 #include <utility>
 #include <vector>
 #include <algorithm>
+#include <climits>
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
-#include <thrust/extrema.h>
-#include <thrust/functional.h>
-#include <thrust/transform_reduce.h>
 #include <thrust/copy.h>
 
 #include "types.hpp"
 #include "parallel/contour_to_signal.cuh"
 #include "helpers.hpp"
 
-static void copy_contour_to_device(
-    const CoordinateVector<int> &points,
-    thrust::device_vector<Coordinate<int>> &d_points)
+namespace
 {
-    // Moore tracing still produces the contour on the host. Resizing a reused
-    // device_vector keeps its capacity when possible, avoiding fresh allocation
-    // for the common case where consecutive pieces have similar contour sizes.
-    d_points.resize(points.size());
-    if (!points.empty())
-    {
-        thrust::copy(points.begin(), points.end(), d_points.begin());
-    }
-}
 
-// Moore neighbor tracing algorithm to get the vector of contour coordinates.
-// This part is intentionally sequential: every next point depends on the
-// current point and the previous search direction. The CUDA pipeline still uses
-// it for now because visualization and radial-signal classification need a
-// connected contour order, not only a set of boundary pixels.
-void trace_contour_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
-{
-    // Goes from top-left to bottom-right to find the first nonzero pixel.
-    // This then becomes the starting point.
-    Coordinate<int> start{-1, -1};
-    for (int i = 0; i < height; ++i)
+    // Moore neighbor tracing algorithm to get the vector of contour coordinates.
+    // This part is intentionally sequential: every next point depends on the
+    // current point and the previous search direction. The CUDA pipeline still
+    // uses it for now because radial-signal classification needs connected
+    // contour order, not only a set of boundary pixels.
+    void trace_contour(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
     {
-        for (int j = 0; j < width; ++j)
+        // Goes from top-left to bottom-right to find the first nonzero pixel.
+        // This then becomes the starting point.
+        Coordinate<int> start{-1, -1};
+        for (int i = 0; i < height; ++i)
         {
-            if (boundary[i * width + j] > 0)
+            for (int j = 0; j < width; ++j)
             {
-                start = {i, j};
-                break;
-            }
-        }
-        if (start.a != -1)
-            break;
-    }
-
-    if (start.a == -1)
-    {
-        std::cerr << "No contour points found in the boundary image." << std::endl;
-        result.clear();
-        return;
-    }
-
-    result.clear();
-    result.push_back(start);
-
-    Coordinate<int> current = start;
-    int prev_dir = 0;
-    std::set<Coordinate<int>> visited;
-    visited.insert(start);
-
-    const int dy[8] = {0, 1, 1, 1, 0, -1, -1, -1};
-    const int dx[8] = {1, 1, 0, -1, -1, -1, 0, 1};
-
-    while (true)
-    {
-        bool found = false;
-        for (int i = 0; i < 8; ++i)
-        {
-            const int dir_idx = (prev_dir + i) % 8;
-            const int ny = current.a + dy[dir_idx];
-            const int nx = current.b + dx[dir_idx];
-
-            if (0 <= ny && ny < height && 0 <= nx && nx < width && boundary[ny * width + nx] > 0)
-            {
-                Coordinate<int> next_point{ny, nx};
-                if (next_point == start && result.size() > 10)
+                if (boundary[i * width + j] > 0)
                 {
-                    return;
-                }
-
-                if (visited.insert(next_point).second)
-                {
-                    result.push_back(next_point);
-                    current = next_point;
-                    prev_dir = (dir_idx + 5) % 8;
-                    found = true;
+                    start = {i, j};
                     break;
                 }
             }
+            if (start.a != -1)
+                break;
         }
 
-        if (!found)
+        if (start.a == -1)
         {
-            break;
+            std::cerr << "No contour points found in the boundary image." << std::endl;
+            result.clear();
+            return;
         }
-    }
-}
 
-void trace_contour_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
-{
-    trace_contour_cuda(boundary.data(), width, height, result);
-}
+        result.clear();
+        result.push_back(start);
 
-// Removes unnecessary points along straight lines.
-// This is also sequential because it depends on adjacent contour order.
-void simplify_chain_approx_cuda(CoordinateVector<int> &contour)
-{
-    if (contour.size() < 3)
-    {
-        return;
-    }
+        Coordinate<int> current = start;
+        int prev_dir = 0;
+        std::set<Coordinate<int>> visited;
+        visited.insert(start);
 
-    CoordinateVector<int> simplified;
-    simplified.push_back(contour.front());
+        const int dy[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+        const int dx[8] = {1, 1, 0, -1, -1, -1, 0, 1};
 
-    for (size_t i = 1; i < contour.size() - 1; ++i)
-    {
-        const int y0 = contour[i - 1].a;
-        const int x0 = contour[i - 1].b;
-        const int y1 = contour[i].a;
-        const int x1 = contour[i].b;
-        const int y2 = contour[i + 1].a;
-        const int x2 = contour[i + 1].b;
-
-        const int dx1 = std::clamp(x1 - x0, -1, 1);
-        const int dy1 = std::clamp(y1 - y0, -1, 1);
-        const int dx2 = std::clamp(x2 - x1, -1, 1);
-        const int dy2 = std::clamp(y2 - y1, -1, 1);
-
-        if (dx1 != dx2 || dy1 != dy2)
+        while (true)
         {
-            simplified.push_back(contour[i]);
+            bool found = false;
+            for (int i = 0; i < 8; ++i)
+            {
+                const int dir_idx = (prev_dir + i) % 8;
+                const int ny = current.a + dy[dir_idx];
+                const int nx = current.b + dx[dir_idx];
+
+                if (0 <= ny && ny < height && 0 <= nx && nx < width && boundary[ny * width + nx] > 0)
+                {
+                    Coordinate<int> next_point{ny, nx};
+                    if (next_point == start && result.size() > 10)
+                    {
+                        return;
+                    }
+
+                    if (visited.insert(next_point).second)
+                    {
+                        result.push_back(next_point);
+                        current = next_point;
+                        prev_dir = (dir_idx + 5) % 8;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                break;
+            }
         }
     }
-    simplified.push_back(contour.back());
-    contour = std::move(simplified);
-}
+
+    // Removes unnecessary points along straight lines.
+    // This is also sequential because it depends on adjacent contour order.
+    void simplify_chain_approx(CoordinateVector<int> &contour)
+    {
+        if (contour.size() < 3)
+        {
+            return;
+        }
+
+        CoordinateVector<int> simplified;
+        simplified.push_back(contour.front());
+
+        for (size_t i = 1; i < contour.size() - 1; ++i)
+        {
+            const int y0 = contour[i - 1].a;
+            const int x0 = contour[i - 1].b;
+            const int y1 = contour[i].a;
+            const int x1 = contour[i].b;
+            const int y2 = contour[i + 1].a;
+            const int x2 = contour[i + 1].b;
+
+            const int dx1 = std::clamp(x1 - x0, -1, 1);
+            const int dy1 = std::clamp(y1 - y0, -1, 1);
+            const int dx2 = std::clamp(x2 - x1, -1, 1);
+            const int dy2 = std::clamp(y2 - y1, -1, 1);
+
+            if (dx1 != dx2 || dy1 != dy2)
+            {
+                simplified.push_back(contour[i]);
+            }
+        }
+        simplified.push_back(contour.back());
+        contour = std::move(simplified);
+    }
+
+} // namespace
 
 void find_contour_chain_approx_simple_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
 {
-    trace_contour_cuda(boundary, width, height, result);
-    simplify_chain_approx_cuda(result);
+    trace_contour(boundary, width, height, result);
+    simplify_chain_approx(result);
 
     // The tracing code stores points as (row, column). Swap them back to
     // (x, y) like the serial implementation and the original Python code.
@@ -164,277 +149,308 @@ void find_contour_chain_approx_simple_cuda(const uint8_t *boundary, int width, i
     }
 }
 
-void find_contour_chain_approx_simple_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
+void build_batched_contours(
+    const std::vector<PuzzlePiece> &pieces,
+    BatchedContours &batch)
 {
-    find_contour_chain_approx_simple_cuda(boundary.data(), width, height, result);
-}
+    // Pack all CPU-traced contours into one structure-of-arrays-like layout:
+    // points holds every contour back-to-back, while offsets/lengths describe
+    // each piece slice. CUDA kernels can then process all pieces in one launch.
+    batch.points.clear();
+    batch.offsets.clear();
+    batch.lengths.clear();
+    batch.max_length = 0;
 
-// ______________________________________________________________________________________________
-
-// custom CUDA kernel for moving average smoothing
-// one thread per contour point, each thread computes the average of its window independently
-__global__ void moving_average_kernel(const Coordinate<int> *points, Coordinate<int> *smoothed, int half_window, int n)
-{
-    // we will load the contour points into shared memory to speed up the reads
-    extern __shared__ Coordinate<int> s_points[];
-
-    // getting the global thread index
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    // getting the index within the block
-    int local_i = threadIdx.x;
-
-    // each thread loads one point into shared memory
-    // wrap with % n so threads beyond the contour end do not leave shared mem uninitialized
-    s_points[local_i + half_window] = points[i % n];
-
-    // loading the left and right border points
-    // this is for windows that extend beyond the border of the points assigned the the block
-    if (local_i < half_window)
+    std::size_t total_points = 0;
+    for (const PuzzlePiece &piece : pieces)
     {
-        s_points[local_i + blockDim.x + half_window] = points[(i + blockDim.x) % n];
-        s_points[local_i] = points[(i - half_window + n) % n];
+        const int length = static_cast<int>(piece.contour.size());
+        total_points += piece.contour.size();
+        batch.max_length = std::max(batch.max_length, length);
     }
 
-    // barrier to make sure all elements are loaded
-    __syncthreads();
+    batch.points.reserve(total_points);
+    batch.offsets.reserve(pieces.size());
+    batch.lengths.reserve(pieces.size());
 
-    // we only need as many threads as there are contour points
-    if (i < n)
+    int offset = 0;
+    for (const PuzzlePiece &piece : pieces)
     {
-        // keeping separate sums for the x and y coordinates
-        float sum_a = 0.0f;
-        float sum_b = 0.0f;
-        // iterating over the window within the vector
-        // window_j is the index within the window
-        // the center of the window is at offset 0
+        const int length = static_cast<int>(piece.contour.size());
+        batch.offsets.push_back(offset);
+        batch.lengths.push_back(length);
+        batch.points.insert(batch.points.end(), piece.contour.begin(), piece.contour.end());
+        offset += length;
+    }
+}
 
-        // for large window sizes, it would make sense
-        // to also parallelize this loop
-        // so one thread per window element and reduction using shared memory
-        // But for our small windows of 5 or 7 the overhead woudl probably dominate
-        for (int window_j = -half_window; window_j <= half_window; ++window_j)
+// Batched moving average smoothing.
+// blockIdx.y selects the piece and blockIdx.x/threadIdx.x selects the local
+// point index within that piece's slice of the flat contour buffer.
+__global__ void batched_moving_average_kernel(
+    const Coordinate<int> *points,
+    Coordinate<int> *smoothed,
+    const int *offsets,
+    const int *lengths,
+    int half_window,
+    int window,
+    int max_length)
+{
+    const int piece_idx = blockIdx.y;
+    const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (local_i >= max_length)
+    {
+        return;
+    }
+
+    const int n = lengths[piece_idx];
+    if (local_i >= n)
+    {
+        return;
+    }
+
+    const int offset = offsets[piece_idx];
+    const int global_i = offset + local_i;
+    if (window <= 1 || window >= n)
+    {
+        // Degenerate smoothing windows keep the original contour unchanged.
+        smoothed[global_i] = points[global_i];
+        return;
+    }
+
+    float sum_a = 0.0f;
+    float sum_b = 0.0f;
+    for (int window_j = -half_window; window_j <= half_window; ++window_j)
+    {
+        int local_j = (local_i + window_j) % n;
+        if (local_j < 0)
         {
-            // window_i is the index within the vector mapped back to the whole vector
-            int window_i = local_i + half_window + window_j;
-            sum_a += static_cast<float>(s_points[window_i].a);
-            sum_b += static_cast<float>(s_points[window_i].b);
+            local_j += n;
         }
 
-        // calculating the average
-        const float divisor = static_cast<float>(2 * half_window + 1);
-        smoothed[i] = Coordinate<int>{
-            static_cast<int>(roundf(sum_a / divisor)),
-            static_cast<int>(roundf(sum_b / divisor))};
+        const Coordinate<int> point = points[offset + local_j];
+        sum_a += static_cast<float>(point.a);
+        sum_b += static_cast<float>(point.b);
     }
+
+    const float divisor = static_cast<float>(window);
+    smoothed[global_i] = Coordinate<int>{
+        static_cast<int>(roundf(sum_a / divisor)),
+        static_cast<int>(roundf(sum_b / divisor))};
 }
 
-// moving average smoothing of the contour points vector
-void smooth_contour_cuda(CoordinateVector<int> &points, int window, ContourCudaScratch &scratch)
+void smooth_contours_batched_cuda(
+    const BatchedContours &batch,
+    int window,
+    BatchedContourCudaScratch &scratch)
 {
-    // in case the contour is empty
-    // or the window size is too small or too large
-    const int n = static_cast<int>(points.size());
-    if (points.empty() || window <= 1 || window >= n)
+    // Moore tracing creates host contours. Upload all of them once, then run a
+    // single batched kernel instead of launching one smoothing kernel per piece.
+    scratch.points.resize(batch.points.size());
+    scratch.smoothed.resize(batch.points.size());
+    scratch.offsets.resize(batch.offsets.size());
+    scratch.lengths.resize(batch.lengths.size());
+
+    if (batch.points.empty() || batch.offsets.empty())
     {
-        // Downstream stages read scratch.points, so keep the device-side
-        // contour consistent even when no smoothing kernel is launched.
-        copy_contour_to_device(points, scratch.points);
         return;
     }
 
-    // the smoothed contour vector will be the same size as the original
-    int half_window = window / 2;
+    thrust::copy(batch.points.begin(), batch.points.end(), scratch.points.begin());
+    thrust::copy(batch.offsets.begin(), batch.offsets.end(), scratch.offsets.begin());
+    thrust::copy(batch.lengths.begin(), batch.lengths.end(), scratch.lengths.begin());
 
-    // Reuse device buffers across pieces instead of allocating fresh vectors
-    // in every downstream CUDA stage.
-    copy_contour_to_device(points, scratch.points);
-    scratch.smoothed.resize(static_cast<std::size_t>(n));
-
-    // dynamically determining the number of blocks
-    int threads_per_block = 256;
-    int num_blocks = (n + threads_per_block - 1) / threads_per_block;
-    // shared memory must also include the border points on each side
-    int shared_mem_size = (threads_per_block + 2 * half_window) * sizeof(Coordinate<int>);
-    // calling the kernel
-    moving_average_kernel<<<num_blocks, threads_per_block, shared_mem_size>>>(
+    const int block = 256;
+    const dim3 grid(
+        static_cast<unsigned int>((batch.max_length + block - 1) / block),
+        static_cast<unsigned int>(batch.offsets.size()));
+    batched_moving_average_kernel<<<grid, block>>>(
         thrust::raw_pointer_cast(scratch.points.data()),
         thrust::raw_pointer_cast(scratch.smoothed.data()),
-        half_window, n);
-
+        thrust::raw_pointer_cast(scratch.offsets.data()),
+        thrust::raw_pointer_cast(scratch.lengths.data()),
+        window / 2,
+        window,
+        batch.max_length);
     CUDA_CHECK(cudaGetLastError());
-
-    // copying the result back from device to host
-    // This copy synchronizes with the kernel on the default stream.
-    thrust::copy(scratch.smoothed.begin(), scratch.smoothed.end(), points.begin());
-    // The smoothed contour becomes the active device contour for the circle
-    // approximation and radial-signal kernel.
-    scratch.points.swap(scratch.smoothed);
 }
 
-void smooth_contour_cuda(CoordinateVector<int> &points, int window)
+__global__ void batched_enclosing_circle_kernel(
+    const Coordinate<int> *points,
+    const int *offsets,
+    const int *lengths,
+    Coordinate<float> *centers)
 {
-    ContourCudaScratch scratch;
-    smooth_contour_cuda(points, window, scratch);
+    __shared__ int s_min_x[256];
+    __shared__ int s_max_x[256];
+    __shared__ int s_min_y[256];
+    __shared__ int s_max_y[256];
+
+    // One CUDA block owns one piece and reduces that piece's bounding box.
+    // The center of this box is the same approximation used by the old path.
+    const int piece_idx = blockIdx.x;
+    const int tid = threadIdx.x;
+    const int n = lengths[piece_idx];
+    const int offset = offsets[piece_idx];
+
+    int min_x = INT_MAX;
+    int max_x = INT_MIN;
+    int min_y = INT_MAX;
+    int max_y = INT_MIN;
+    for (int i = tid; i < n; i += blockDim.x)
+    {
+        const Coordinate<int> point = points[offset + i];
+        if (point.a < min_x)
+        {
+            min_x = point.a;
+        }
+        if (point.a > max_x)
+        {
+            max_x = point.a;
+        }
+        if (point.b < min_y)
+        {
+            min_y = point.b;
+        }
+        if (point.b > max_y)
+        {
+            max_y = point.b;
+        }
+    }
+
+    s_min_x[tid] = min_x;
+    s_max_x[tid] = max_x;
+    s_min_y[tid] = min_y;
+    s_max_y[tid] = max_y;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2)
+    {
+        if (tid < stride)
+        {
+            if (s_min_x[tid + stride] < s_min_x[tid])
+            {
+                s_min_x[tid] = s_min_x[tid + stride];
+            }
+            if (s_max_x[tid + stride] > s_max_x[tid])
+            {
+                s_max_x[tid] = s_max_x[tid + stride];
+            }
+            if (s_min_y[tid + stride] < s_min_y[tid])
+            {
+                s_min_y[tid] = s_min_y[tid + stride];
+            }
+            if (s_max_y[tid + stride] > s_max_y[tid])
+            {
+                s_max_y[tid] = s_max_y[tid + stride];
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0)
+    {
+        if (n <= 0)
+        {
+            centers[piece_idx] = Coordinate<float>{0.0f, 0.0f};
+        }
+        else
+        {
+            const float center_x = (static_cast<float>(s_min_x[0]) + static_cast<float>(s_max_x[0])) * 0.5f;
+            const float center_y = (static_cast<float>(s_min_y[0]) + static_cast<float>(s_max_y[0])) * 0.5f;
+            centers[piece_idx] = Coordinate<float>{center_x, center_y};
+        }
+    }
 }
 
-// ______________________________________________________________________________________________
-
-// Some thrust functors
-// as far as I understand it, these are like the custom algorithmic parts of kernels
-// which get translated into true kernels by thrust
-// So every thread executes the same functor, but on different data
-
-// Thrust functor for comparing the x and y coordinates
-// needed for finding the min and max x and y of the contour points
-struct compare_x
+void enclosing_circle_centers_batched_cuda(
+    const BatchedContours &batch,
+    BatchedContourCudaScratch &scratch,
+    std::vector<Coordinate<float>> &centers)
 {
-    __host__ __device__ bool operator()(const Coordinate<int> &lhs, const Coordinate<int> &rhs) const
+    const std::size_t piece_count = batch.offsets.size();
+    centers.resize(piece_count);
+    if (piece_count == 0)
     {
-        return lhs.a < rhs.a;
+        return;
     }
-};
-struct compare_y
-{
-    __host__ __device__ bool operator()(const Coordinate<int> &lhs, const Coordinate<int> &rhs) const
+    if (scratch.smoothed.empty())
     {
-        return lhs.b < rhs.b;
-    }
-};
-
-// Needed for finding the contour point with the farthest distance to the center
-// essentially just calculates the square distance from the center for each point
-struct square_distance
-{
-    float cx;
-    float cy;
-    __host__ __device__ float operator()(const Coordinate<int> &p) const
-    {
-        float dx = p.a - cx;
-        float dy = p.b - cy;
-        return dx * dx + dy * dy;
-    }
-};
-
-static void enclosing_circle_approx_device_cuda(
-    const thrust::device_vector<Coordinate<int>> &d_points,
-    Coordinate<float> &center,
-    float &radius)
-{
-    // Shared implementation for both APIs:
-    // - the legacy overload uploads a host contour first,
-    // - the scratch overload reuses the already-smoothed device contour.
-    if (d_points.empty())
-    {
-        center = {0.0f, 0.0f};
-        radius = 0.0f;
+        std::fill(centers.begin(), centers.end(), Coordinate<float>{0.0f, 0.0f});
         return;
     }
 
-    // finding the min and max x and y coordinates of the contour points in parallel
-    auto minmax_x = thrust::minmax_element(d_points.begin(), d_points.end(), compare_x());
-    auto minmax_y = thrust::minmax_element(d_points.begin(), d_points.end(), compare_y());
+    scratch.centers.resize(piece_count);
 
-    // copying back from device to host
-    Coordinate<int> cx_min = *(minmax_x.first);
-    Coordinate<int> cx_max = *(minmax_x.second);
-    Coordinate<int> cy_min = *(minmax_y.first);
-    Coordinate<int> cy_max = *(minmax_y.second);
+    // One block reduces one piece contour. The pipeline only needs the center,
+    // so there is no radius reduction in the batched path.
+    const int block = 256;
+    batched_enclosing_circle_kernel<<<static_cast<unsigned int>(piece_count), block>>>(
+        thrust::raw_pointer_cast(scratch.smoothed.data()),
+        thrust::raw_pointer_cast(scratch.offsets.data()),
+        thrust::raw_pointer_cast(scratch.lengths.data()),
+        thrust::raw_pointer_cast(scratch.centers.data()));
+    CUDA_CHECK(cudaGetLastError());
 
-    // computing the center based on the min and max x and y
-    float cx = (cx_min.a + cx_max.a) / 2.0f;
-    float cy = (cy_min.b + cy_max.b) / 2.0f;
-
-    // goes through all the boundary points
-    // and finds which one has the max distance to the center
-    float max_sq_dist = thrust::transform_reduce(
-        d_points.begin(),
-        d_points.end(),
-        square_distance{cx, cy}, // Using the functor here
-        0.0f,                    // Starting value for finding the max
-        thrust::maximum<float>() // Reduction operation, we want the max
-    );
-
-    // taking the sqrt to get the actual radius from the max square distance
-    // using cuda sqrtf for consistency
-    center = {cx, cy};
-    radius = sqrtf(max_sq_dist);
+    thrust::copy(scratch.centers.begin(), scratch.centers.end(), centers.begin());
 }
 
-// Calculates the center and radius of a circle that encloses the contour points
-void enclosing_circle_approx_cuda(const CoordinateVector<int> &points, Coordinate<float> &center, float &radius)
+__global__ void batched_radial_signal_kernel(
+    const Coordinate<int> *points,
+    const int *offsets,
+    const int *lengths,
+    const Coordinate<float> *centers,
+    float *signals,
+    int max_length)
 {
-    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
-    enclosing_circle_approx_device_cuda(d_points, center, radius);
-}
-
-void enclosing_circle_approx_cuda(const ContourCudaScratch &scratch, Coordinate<float> &center, float &radius)
-{
-    enclosing_circle_approx_device_cuda(scratch.points, center, radius);
-}
-
-// ______________________________________________________________________________________________
-
-// Finally a real custom cuda kernel
-__global__ void radial_signal_kernel(const Coordinate<int> *points, float *signal, int num_points, Coordinate<float> center)
-{
-    // getting the global thread index
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-    // we only need as many threads as there are contour points
-    if (i < num_points)
+    // blockIdx.y selects the piece; x-dimension threads cover local contour
+    // indices. The output uses the same flat offsets as the contour buffer.
+    const int piece_idx = blockIdx.y;
+    const int local_i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (local_i >= max_length)
     {
-        // calculating the distance from the center for each contour point in parallel
-        float dx = points[i].a - center.a;
-        float dy = points[i].b - center.b;
-        // using cuda sqrtf
-        signal[i] = sqrtf(dx * dx + dy * dy);
-    }
-}
-
-static void radial_signal_device_cuda(
-    const thrust::device_vector<Coordinate<int>> &d_points,
-    Coordinate<float> center,
-    Signal &signal,
-    thrust::device_vector<float> &d_signal)
-{
-    // Keep the device output in a reusable buffer, but still copy the signal
-    // back because peak filtering and edge classification currently run on CPU.
-    const int n = static_cast<int>(d_points.size());
-    signal.resize(static_cast<std::size_t>(n));
-    if (n == 0)
-    {
-        d_signal.clear();
         return;
     }
 
-    d_signal.resize(static_cast<std::size_t>(n));
+    const int n = lengths[piece_idx];
+    if (local_i >= n)
+    {
+        return;
+    }
 
-    // dynamically determining the number of blocks
-    int threads_per_block = 256;
-    int num_blocks = (n + threads_per_block - 1) / threads_per_block;
-    // calling the kernel
-    radial_signal_kernel<<<num_blocks, threads_per_block>>>(
-        thrust::raw_pointer_cast(d_points.data()),
-        thrust::raw_pointer_cast(d_signal.data()),
-        n,
-        center);
+    const int global_i = offsets[piece_idx] + local_i;
+    const Coordinate<int> point = points[global_i];
+    const Coordinate<float> center = centers[piece_idx];
+    const float dx = static_cast<float>(point.a) - center.a;
+    const float dy = static_cast<float>(point.b) - center.b;
+    signals[global_i] = sqrtf(dx * dx + dy * dy);
+}
 
+void radial_signals_batched_cuda(
+    const BatchedContours &batch,
+    BatchedContourCudaScratch &scratch,
+    Signal &signals)
+{
+    signals.resize(batch.points.size());
+    scratch.signals.resize(batch.points.size());
+    if (batch.points.empty() || batch.offsets.empty())
+    {
+        return;
+    }
+
+    // One batched launch produces the flat radial signal for all pieces.
+    const int block = 256;
+    const dim3 grid(
+        static_cast<unsigned int>((batch.max_length + block - 1) / block),
+        static_cast<unsigned int>(batch.offsets.size()));
+    batched_radial_signal_kernel<<<grid, block>>>(
+        thrust::raw_pointer_cast(scratch.smoothed.data()),
+        thrust::raw_pointer_cast(scratch.offsets.data()),
+        thrust::raw_pointer_cast(scratch.lengths.data()),
+        thrust::raw_pointer_cast(scratch.centers.data()),
+        thrust::raw_pointer_cast(scratch.signals.data()),
+        batch.max_length);
     CUDA_CHECK(cudaGetLastError());
 
-    // copying the result back from device to host
-    // This copy synchronizes with the kernel on the default stream.
-    thrust::copy(d_signal.begin(), d_signal.end(), signal.begin());
-}
-
-// Calculates a vector of distances from the center, one for each contour point
-void radial_signal_cuda(const CoordinateVector<int> &points, Coordinate<float> center, Signal &signal)
-{
-    thrust::device_vector<Coordinate<int>> d_points(points.begin(), points.end());
-    thrust::device_vector<float> d_signal;
-    radial_signal_device_cuda(d_points, center, signal, d_signal);
-}
-
-void radial_signal_cuda(ContourCudaScratch &scratch, Coordinate<float> center, Signal &signal)
-{
-    radial_signal_device_cuda(scratch.points, center, signal, scratch.signal);
+    thrust::copy(scratch.signals.begin(), scratch.signals.end(), signals.begin());
 }

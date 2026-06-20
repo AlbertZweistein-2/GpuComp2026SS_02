@@ -424,7 +424,7 @@ namespace
     }
 }
 
-void init_labels_buf_cuda_device(
+static void init_labels_buf_cuda_device(
     const uint8_t *d_binary,
     int *d_labels,
     int width,
@@ -435,7 +435,7 @@ void init_labels_buf_cuda_device(
     init_block_labels_kernel<<<grid, block>>>(d_binary, d_labels, width, height);
 }
 
-void union_labels_buf_cuda_device(
+static void union_labels_buf_cuda_device(
     const uint8_t *d_binary,
     int *d_labels,
     int width,
@@ -446,7 +446,7 @@ void union_labels_buf_cuda_device(
     merge_block_labels_kernel<<<grid, block>>>(d_binary, d_labels, width, height);
 }
 
-void compress_labels_buf_cuda_device(
+static void compress_labels_buf_cuda_device(
     int *d_labels,
     int total_pixels)
 {

@@ -78,6 +78,7 @@ using Corners = std::array<int, 4>;
 using EdgeLabels = std::array<EdgeType, 4>;
 
 struct PipelineTimings {
+    double cuda_setup = 0.0;
     double preprocessing = 0.0;
     double connected_components = 0.0;
     double boundary_extraction = 0.0;
