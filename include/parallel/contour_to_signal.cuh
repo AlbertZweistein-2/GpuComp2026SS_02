@@ -5,31 +5,30 @@
 
 #include "types.hpp"
 
-// inherently sequential, identical to serial implementation
-void trace_contour_cuda(
-    const std::vector<uint8_t> &boundary,
-    int width,
-    int height,
-    CoordinateVector<int> &result);
-
+// Moore neighbor tracing is inherently sequential, but it gives the connected
+// contour order needed by the current visualization and radial signal logic.
 void trace_contour_cuda(
     const uint8_t *boundary,
     int width,
     int height,
     CoordinateVector<int> &result);
 
-// inherently sequential, identical to serial implementation
+void trace_contour_cuda(
+    const std::vector<uint8_t> &boundary,
+    int width,
+    int height,
+    CoordinateVector<int> &result);
+
 void simplify_chain_approx_cuda(CoordinateVector<int> &contour);
 
-// sequential tracing + parallel coordinate swap via thrust::transform
 void find_contour_chain_approx_simple_cuda(
-    const std::vector<uint8_t> &boundary,
+    const uint8_t *boundary,
     int width,
     int height,
     CoordinateVector<int> &result);
 
 void find_contour_chain_approx_simple_cuda(
-    const uint8_t *boundary,
+    const std::vector<uint8_t> &boundary,
     int width,
     int height,
     CoordinateVector<int> &result);

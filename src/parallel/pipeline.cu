@@ -393,24 +393,20 @@ PipelineResult run_cuda(const PipelineOptions &options)
     result.pieces.reserve(regions.size());
     const PuzzleLookupTable puzzle_lookup;
 
+    std::vector<PieceBoundaryMask> piece_boundaries;
     std::vector<uint8_t> piece_boundary_data;
-    PieceBoundaryPointBatch piece_boundary_points;
 
-    // STEP 4: Extract all piece boundary points from the compact label image
+    // STEP 4: Extract all piece boundary masks from the compact label image
     debug_print("[cuda pipeline] extracting piece boundaries");
     time_stage("Boundary extraction", result.timings.boundary_extraction, [&]()
                {
-        extract_piece_boundary_points_from_labels_cuda(
+        extract_piece_boundary_masks_from_labels_cuda(
             d_compact_labels_ptr,
             regions,
             width,
             height,
-            piece_boundary_points);
-        copy_boundary_points_to_masks_host(
-            piece_boundary_points,
+            piece_boundaries,
             piece_boundary_data); });
-
-    const std::vector<PieceBoundaryMask> &piece_boundaries = piece_boundary_points.boundaries;
 
     for (std::size_t region_idx = 0; region_idx < regions.size(); ++region_idx)
     {
@@ -421,7 +417,9 @@ PipelineResult run_cuda(const PipelineOptions &options)
         PuzzlePiece piece;
         piece.region = region;
 
-        // STEP 5: Convert host boundary mask to global contour points
+        // STEP 5: Convert host boundary mask to a connected global contour.
+        // This uses Moore tracing again because angle-sorted boundary pixels
+        // were not a valid connected contour for concave puzzle pieces.
         debug_print("[cuda pipeline] extracting contour: " + std::to_string(region.label));
         time_stage("Contour extraction", result.timings.contour_extraction, [&]()
                    {

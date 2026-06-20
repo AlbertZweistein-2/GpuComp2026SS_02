@@ -1,14 +1,15 @@
-#include <iostream>
-#include <vector>
-#include <set>
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iostream>
+#include <set>
 #include <utility>
+#include <vector>
+#include <algorithm>
 
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 
+#include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/reduce.h>
 #include <thrust/extrema.h>
@@ -19,23 +20,20 @@
 #include "parallel/contour_to_signal.cuh"
 #include "helpers.hpp"
 
-// Moore neighbor tracing algorithm to get the vector of contour coordinates
-// Inherently sequential, therefore not parallelizeable
-// Not sensible to parallelize this, options like one thread per contour point
-// or splitting the image into chunks and separately doing contour tracing
-// all leads to messy reordering and stitching of contours
-// so very complex for very little speedup
+// Moore neighbor tracing algorithm to get the vector of contour coordinates.
+// This part is intentionally sequential: every next point depends on the
+// current point and the previous search direction. The CUDA pipeline still uses
+// it for now because visualization and radial-signal classification need a
+// connected contour order, not only a set of boundary pixels.
 void trace_contour_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
 {
-
-    // Goes from top-left to bottom-right to find the first nonzero pixel
-    // this then becomes the starting point
+    // Goes from top-left to bottom-right to find the first nonzero pixel.
+    // This then becomes the starting point.
     Coordinate<int> start{-1, -1};
     for (int i = 0; i < height; ++i)
     {
         for (int j = 0; j < width; ++j)
         {
-            // boundary is the image as a 1D vector
             if (boundary[i * width + j] > 0)
             {
                 start = {i, j};
@@ -46,7 +44,6 @@ void trace_contour_cuda(const uint8_t *boundary, int width, int height, Coordina
             break;
     }
 
-    // If not a single nonzero pixel was found
     if (start.a == -1)
     {
         std::cerr << "No contour points found in the boundary image." << std::endl;
@@ -54,65 +51,45 @@ void trace_contour_cuda(const uint8_t *boundary, int width, int height, Coordina
         return;
     }
 
-    // the actual contour vector
     result.clear();
-    // adding the start pixel
     result.push_back(start);
 
     Coordinate<int> current = start;
     int prev_dir = 0;
-    // and keeping a set of unique coordinates that have been visited
     std::set<Coordinate<int>> visited;
     visited.insert(start);
 
-    // an array of the indices corresponding to the eight neighboring pixels
     const int dy[8] = {0, 1, 1, 1, 0, -1, -1, -1};
     const int dx[8] = {1, 1, 0, -1, -1, -1, 0, 1};
 
     while (true)
     {
         bool found = false;
-        // checking all eight neighbors clockwise
         for (int i = 0; i < 8; ++i)
         {
-            int dir_idx = (prev_dir + i) % 8;
+            const int dir_idx = (prev_dir + i) % 8;
+            const int ny = current.a + dy[dir_idx];
+            const int nx = current.b + dx[dir_idx];
 
-            // nx and ny are the coordinates of the neighboring pixel we are currently checking
-            int ny = current.a + dy[dir_idx];
-            int nx = current.b + dx[dir_idx];
-
-            // a lot of conditions
-            // if nx and ny are within the image bounds
-            // and if the pixal at (ny, nx) is nonzero
             if (0 <= ny && ny < height && 0 <= nx && nx < width && boundary[ny * width + nx] > 0)
             {
-
-                Coordinate<int> next_point = Coordinate<int>{ny, nx};
-                // if this is the starting point again
-                // and we have found more than ten points
-                // we converge
+                Coordinate<int> next_point{ny, nx};
                 if (next_point == start && result.size() > 10)
                 {
                     return;
                 }
 
-                // if it has not been visited before
                 if (visited.insert(next_point).second)
                 {
-                    // we add it to the contour vector
                     result.push_back(next_point);
-                    // and start again, but now from the new point
                     current = next_point;
                     prev_dir = (dir_idx + 5) % 8;
-                    // we log that we have found a new point
                     found = true;
                     break;
                 }
             }
         }
 
-        // if we have checked all eight neighbors and found no new point
-        // the contour has ended
         if (!found)
         {
             break;
@@ -125,12 +102,8 @@ void trace_contour_cuda(const std::vector<uint8_t> &boundary, int width, int hei
     trace_contour_cuda(boundary.data(), width, height, result);
 }
 
-// ______________________________________________________________________________________________
-
-// Removes unnecessary points along straight lines, we only need the corners
-// Also inherently sequential, therefore not parallelizeable
-// As explained for the last function, also not sensibly parallelizeable
-// very complex for very little speeduo
+// Removes unnecessary points along straight lines.
+// This is also sequential because it depends on adjacent contour order.
 void simplify_chain_approx_cuda(CoordinateVector<int> &contour)
 {
     if (contour.size() < 3)
@@ -141,33 +114,22 @@ void simplify_chain_approx_cuda(CoordinateVector<int> &contour)
     CoordinateVector<int> simplified;
     simplified.push_back(contour.front());
 
-    // we iterate through the contour points, starting from the second point
     for (size_t i = 1; i < contour.size() - 1; ++i)
     {
-        // we use a sliding window of three points
-        // the previous one
-        int y0 = contour[i - 1].a;
-        int x0 = contour[i - 1].b;
-        // the current one
-        int y1 = contour[i].a;
-        int x1 = contour[i].b;
-        // and the next one
-        int y2 = contour[i + 1].a;
-        int x2 = contour[i + 1].b;
+        const int y0 = contour[i - 1].a;
+        const int x0 = contour[i - 1].b;
+        const int y1 = contour[i].a;
+        const int x1 = contour[i].b;
+        const int y2 = contour[i + 1].a;
+        const int x2 = contour[i + 1].b;
 
-        // we then check the direction between the
-        // previous and current point
-        int dx1 = std::clamp(x1 - x0, -1, 1);
-        int dy1 = std::clamp(y1 - y0, -1, 1);
-        // and current and next point
-        int dx2 = std::clamp(x2 - x1, -1, 1);
-        int dy2 = std::clamp(y2 - y1, -1, 1);
+        const int dx1 = std::clamp(x1 - x0, -1, 1);
+        const int dy1 = std::clamp(y1 - y0, -1, 1);
+        const int dx2 = std::clamp(x2 - x1, -1, 1);
+        const int dy2 = std::clamp(y2 - y1, -1, 1);
 
-        // if the two directions are different, the contour is turning
-        // so the current point is a necessary corner
         if (dx1 != dx2 || dy1 != dy2)
         {
-            // and we add it to the simplified contour
             simplified.push_back(contour[i]);
         }
     }
@@ -183,22 +145,13 @@ struct swap_ab
     }
 };
 
-// ______________________________________________________________________________________________
-
-// Just a function to first call the two previous functions
-// for contour tracing and simplification
-// and then swaps the coordinates from (y, x) back to (x, y) just like in the original python code
 void find_contour_chain_approx_simple_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
 {
-    // just calling the two previous functions
     trace_contour_cuda(boundary, width, height, result);
     simplify_chain_approx_cuda(result);
 
-    // swapping coordinates from (y, x) to (x, y)
-    // just like in the original python code
-
-    // finally something to parallelize
-    // we need to check if the speedup from parallelizing exceeds the overhead
+    // The tracing code stores points as (row, column). Swap them back to
+    // (x, y) like the serial implementation and the original Python code.
     thrust::device_vector<Coordinate<int>> d_contour = result;
     thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_ab());
     thrust::copy(d_contour.begin(), d_contour.end(), result.begin());

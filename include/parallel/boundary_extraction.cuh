@@ -1,10 +1,8 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
+#include <cstddef>
 #include <vector>
-
-#include <thrust/device_vector.h>
 
 #include "types.hpp"
 
@@ -16,21 +14,13 @@ struct PieceBoundaryMask
     Coordinate<int> image_offset;
 };
 
-struct PieceBoundaryPointBatch
-{
-    std::vector<PieceBoundaryMask> boundaries;
-    thrust::device_vector<int> point_offsets;
-    thrust::device_vector<int> point_counts;
-    thrust::device_vector<Coordinate<int>> points;
-};
-
-void extract_piece_boundary_points_from_labels_cuda(
+// Extracts cropped boundary masks for all regions in one batched CUDA launch.
+// boundary_data is a flat host buffer; PieceBoundaryMask::data_offset selects
+// the mask belonging to each region.
+void extract_piece_boundary_masks_from_labels_cuda(
     const int *d_labels,
     const std::vector<Region> &regions,
     int image_width,
     int image_height,
-    PieceBoundaryPointBatch &batch);
-
-void copy_boundary_points_to_masks_host(
-    const PieceBoundaryPointBatch &batch,
+    std::vector<PieceBoundaryMask> &boundaries,
     std::vector<uint8_t> &boundary_data);
