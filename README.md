@@ -48,12 +48,12 @@ Build flags:
 | Flag | Default | Effect |
 |:-----|:--------|:-------|
 | `DEBUG` | `0` | enable verbose logging |
-| `TIMINGS` | `1` | measure per-stage runtimes |
+| `SUB_TIMINGS` | `1` | measure per-stage runtimes |
 | `PERSIST_TIMINGS` | `0` | append timing results to CSV |
 | `NVTX` | `0` | emit Nsight Systems stage ranges |
 | `ARCH` | `sm_75` | CUDA target architecture|
 
-Example: `TIMINGS=1 DEBUG=0 NVTX=1 ./build_cuda.sh`
+Example: `SUB_TIMINGS=1 DEBUG=0 NVTX=1 ./build_cuda.sh`
 
 ## Run
 
