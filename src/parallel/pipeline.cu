@@ -51,7 +51,7 @@ namespace fs = std::filesystem;
 namespace
 {
     // TODO: Experiment with constants to avoid misclassification if time
-    constexpr int GAUSSIAN_KERNEL_SIZE = 3;
+    constexpr int GAUSSIAN_KERNEL_SIZE = 3; // KSize must be odd and >= 3!
     constexpr float GAUSSIAN_SIGMA = 1.0f;
     constexpr int MIN_REGION_AREA = 2000;
     constexpr int CONTOUR_SMOOTHING_WINDOW = 5;
@@ -350,10 +350,15 @@ PipelineResult run_cuda(const PipelineOptions &options)
     const int total_pixels = width * height;
     const int min_region_area = scaled_min_region_area(height);
 
+    // Copy rgb image to device memory
+    thrust::device_vector<uint8_t> d_rgb(static_cast<size_t>(total_pixels * 3));
+    thrust::copy(rgb.get(), rgb.get() + total_pixels * 3, d_rgb.begin());
     thrust::device_vector<uint8_t> d_cleaned(static_cast<size_t>(total_pixels));
     thrust::device_vector<int> d_compact_labels(static_cast<size_t>(total_pixels));
     thrust::device_vector<uint8_t> d_piece_boundary(static_cast<size_t>(total_pixels));
 
+    // Get device Pointers for the device vectors
+    uint8_t *d_rgb_ptr = thrust::raw_pointer_cast(d_rgb.data());
     uint8_t *d_cleaned_ptr = thrust::raw_pointer_cast(d_cleaned.data());
     int *d_compact_labels_ptr = thrust::raw_pointer_cast(d_compact_labels.data());
     uint8_t *d_piece_boundary_ptr = thrust::raw_pointer_cast(d_piece_boundary.data());
@@ -361,8 +366,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[cuda pipeline] preprocessing and cleaning");
     time_stage("Preprocessing", result.timings.preprocessing, [&]()
-               { preprocess_cuda_device(
-                     rgb.get(),
+               { preprocess_cuda(
+                     d_rgb_ptr,
                      d_cleaned_ptr,
                      width,
                      height,

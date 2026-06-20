@@ -5,16 +5,7 @@
 #include "types.hpp"
 
 void preprocess_cuda(
-    const uint8_t* rgb,
-    int width,
-    int height,
-    int ksize,
-    float sigma,
-    ImageU8& result
-);
-
-void preprocess_cuda_device(
-    const uint8_t* rgb,
+    const uint8_t* d_rgb,
     uint8_t* d_cleaned,
     int width,
     int height,

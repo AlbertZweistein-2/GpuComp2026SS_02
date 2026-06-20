@@ -112,12 +112,6 @@ __global__ void normalize_kernel(
 // -----------------------------------------------------------------------------
 static std::vector<float> make_gaussian_kernel(int ksize, float sigma)
 {
-    if (ksize < 1 || ksize % 2 == 0 || ksize > MAX_KERNEL)
-        throw std::invalid_argument(
-            "ksize must be odd and <= " + std::to_string(MAX_KERNEL));
-    if (sigma <= 0.f)
-        throw std::invalid_argument("sigma must be > 0");
-
     std::vector<float> kernel(ksize * ksize);
     int half = ksize / 2;
     float sum = 0.f;
@@ -271,52 +265,24 @@ __global__ void otsu_threshold_kernel(
 }
 
 // -----------------------------------------------------------------------------
-// FOR CUDA Impl.
-// STEP 5 — Binarization
-// -----------------------------------------------------------------------------
-__global__ void binarize_kernel(
-    const float *gray,
-    const float *threshold,
-    uint8_t *binary,
-    int num_pixels)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-
-    for (int idx = i; idx < num_pixels; idx += stride)
-    {
-        binary[idx] = (gray[idx] > *threshold) ? 255u : 0u;
-    }
-}
-
-// -----------------------------------------------------------------------------
 // Preprocessing stages only. Cleaning is in parallel/cleaning.cuh.
 // -----------------------------------------------------------------------------
 
-void preprocess_cuda_device(
-    const uint8_t *rgb,
-    uint8_t *d_cleaned,
+void preprocess_cuda(
+    const uint8_t *d_rgb_ptr,
+    uint8_t *d_cleaned_ptr,
     int width,
     int height,
     int ksize,
     float sigma)
 {
-    if (width <= 0 || height <= 0)
-        throw std::invalid_argument("width and height must be > 0");
-
-    if (ksize < 1 || ksize % 2 == 0 || ksize > MAX_KERNEL)
-        throw std::invalid_argument("ksize must be odd and <= 15");
-
     const int num_pixels = width * height;
 
-    const size_t rgb_bytes = static_cast<size_t>(num_pixels) * 3 * sizeof(uint8_t);
     const size_t float_bytes = static_cast<size_t>(num_pixels) * sizeof(float);
     const size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
 
     std::vector<float> kernel = make_gaussian_kernel(ksize, sigma);
 
-    uint8_t *d_rgb = nullptr;
-    uint8_t *d_binary = nullptr;
     uint8_t *d_temp = nullptr;
     float *d_gray = nullptr;
     float *d_blurred = nullptr;
@@ -324,16 +290,12 @@ void preprocess_cuda_device(
     float *d_threshold = nullptr;
     float *d_minmax = nullptr;
 
-    CUDA_CHECK(cudaMalloc(&d_rgb, rgb_bytes));
-    CUDA_CHECK(cudaMalloc(&d_binary, binary_bytes));
     CUDA_CHECK(cudaMalloc(&d_temp, binary_bytes));
     CUDA_CHECK(cudaMalloc(&d_gray, float_bytes));
     CUDA_CHECK(cudaMalloc(&d_blurred, float_bytes));
     CUDA_CHECK(cudaMalloc(&d_hist, HIST_BINS * sizeof(uint32_t)));
     CUDA_CHECK(cudaMalloc(&d_threshold, sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_minmax, 2 * sizeof(float)));
-
-    CUDA_CHECK(cudaMemcpy(d_rgb, rgb, rgb_bytes, cudaMemcpyHostToDevice));
 
     CUDA_CHECK(cudaMemcpyToSymbol(
         d_gaussian_kernel,
@@ -344,7 +306,7 @@ void preprocess_cuda_device(
     int grid1d = (num_pixels + block1d - 1) / block1d;
 
     rgb_to_grayscale_kernel<<<grid1d, block1d>>>(
-        d_rgb,
+        d_rgb_ptr,
         d_gray,
         width,
         height);
@@ -394,66 +356,19 @@ void preprocess_cuda_device(
         d_threshold);
     CUDA_CHECK(cudaGetLastError());
 
-    binarize_kernel<<<grid1d, block1d>>>(
+    binarize_morphological_open_cuda_device(
         d_blurred,
         d_threshold,
-        d_binary,
-        num_pixels);
-    CUDA_CHECK(cudaGetLastError());
-
-    morphological_open_cuda_device(
-        d_binary,
         d_temp,
-        d_cleaned,
+        d_cleaned_ptr,
         width,
         height);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    CUDA_CHECK(cudaFree(d_rgb));
-    CUDA_CHECK(cudaFree(d_binary));
     CUDA_CHECK(cudaFree(d_temp));
     CUDA_CHECK(cudaFree(d_gray));
     CUDA_CHECK(cudaFree(d_blurred));
     CUDA_CHECK(cudaFree(d_hist));
     CUDA_CHECK(cudaFree(d_threshold));
     CUDA_CHECK(cudaFree(d_minmax));
-}
-
-void preprocess_cuda(
-    const uint8_t *rgb,
-    int width,
-    int height,
-    int ksize,
-    float sigma,
-    ImageU8 &result)
-{
-    if (width <= 0 || height <= 0)
-        throw std::invalid_argument("width and height must be > 0");
-
-    result.width = width;
-    result.height = height;
-
-    const int num_pixels = width * height;
-    const size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
-
-    result.data.resize(static_cast<size_t>(num_pixels));
-
-    uint8_t *d_cleaned = nullptr;
-
-    CUDA_CHECK(cudaMalloc(&d_cleaned, binary_bytes));
-    preprocess_cuda_device(
-        rgb,
-        d_cleaned,
-        width,
-        height,
-        ksize,
-        sigma);
-
-    CUDA_CHECK(cudaMemcpy(
-        result.data.data(),
-        d_cleaned,
-        binary_bytes,
-        cudaMemcpyDeviceToHost));
-
-    CUDA_CHECK(cudaFree(d_cleaned));
 }
