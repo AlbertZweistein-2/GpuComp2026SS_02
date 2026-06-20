@@ -3,39 +3,52 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
-#include <string>
+#include <vector>
 
 #include <cuda_runtime.h>
+#include <thrust/device_ptr.h>
+#include <thrust/device_vector.h>
+
 #include "helpers.hpp"
 
-__global__ void piece_boundary_from_labels_kernel(
-    const int *labels,
-    uint8_t *boundary,
-    int image_width,
-    int image_height,
-    int target_label,
-    int x0,
-    int y0,
-    int boundary_width,
-    int boundary_height)
+namespace
 {
-    const int local_x = blockIdx.x * blockDim.x + threadIdx.x;
-    const int local_y = blockIdx.y * blockDim.y + threadIdx.y;
+struct BoundaryBox
+{
+    int label;
+    int x0;
+    int y0;
+    int width;
+    int height;
+    std::size_t data_offset;
+};
 
-    if (local_x >= boundary_width || local_y >= boundary_height)
+__global__ void piece_boundaries_from_labels_kernel(
+    const int *labels,
+    const BoundaryBox *boxes,
+    uint8_t *boundary_data,
+    int image_width,
+    int image_height)
+{
+    const int box_idx = blockIdx.y;
+    const BoundaryBox box = boxes[box_idx];
+    const std::size_t local_idx = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (local_idx >= static_cast<std::size_t>(box.width) * box.height)
     {
         return;
     }
 
-    const int x = x0 + local_x;
-    const int y = y0 + local_y;
-    const int boundary_idx = local_y * boundary_width + local_x;
+    const std::size_t packed_idx = box.data_offset + local_idx;
+    const int local_x = static_cast<int>(local_idx % box.width);
+    const int local_y = static_cast<int>(local_idx / box.width);
+
+    const int x = box.x0 + local_x;
+    const int y = box.y0 + local_y;
     const int image_idx = y * image_width + x;
 
-    if (labels[image_idx] != target_label)
+    if (labels[image_idx] != box.label)
     {
-        boundary[boundary_idx] = 0;
+        boundary_data[packed_idx] = 0;
         return;
     }
 
@@ -52,7 +65,7 @@ __global__ void piece_boundary_from_labels_kernel(
             const int nx = x + dx;
             const int ny = y + dy;
             if (nx < 0 || nx >= image_width || ny < 0 || ny >= image_height ||
-                labels[ny * image_width + nx] != target_label)
+                labels[ny * image_width + nx] != box.label)
             {
                 is_boundary = true;
                 break;
@@ -60,53 +73,76 @@ __global__ void piece_boundary_from_labels_kernel(
         }
     }
 
-    boundary[boundary_idx] = is_boundary ? 255 : 0;
+    boundary_data[packed_idx] = is_boundary ? 255 : 0;
 }
+} // namespace
 
-void get_piece_boundary_mask_from_labels_cuda(
+void get_piece_boundary_masks_from_labels_cuda(
     const int *d_labels,
-    const Region &region,
-    uint8_t *d_boundary,
+    const std::vector<Region> &regions,
     int image_width,
     int image_height,
-    ImageU8 &boundary,
-    Coordinate<int> &offset)
+    std::vector<uint8_t> &boundary_data,
+    std::vector<PieceBoundaryMask> &boundaries)
 {
-    const int x0 = std::max(0, region.x - 1);
-    const int y0 = std::max(0, region.y - 1);
-    const int x1 = std::min(image_width, region.x + region.width + 1);
-    const int y1 = std::min(image_height, region.y + region.height + 1);
+    std::vector<BoundaryBox> boxes;
+    boxes.reserve(regions.size());
+    boundaries.clear();
+    boundaries.reserve(regions.size());
 
-    const int boundary_width = x1 - x0;
-    const int boundary_height = y1 - y0;
-    const std::size_t boundary_size = static_cast<std::size_t>(boundary_width) * boundary_height;
+    std::size_t total_boundary_pixels = 0;
+    std::size_t max_boundary_pixels = 0;
+    for (const Region &region : regions)
+    {
+        const int x0 = std::max(0, region.x - 1);
+        const int y0 = std::max(0, region.y - 1);
+        const int x1 = std::min(image_width, region.x + region.width + 1);
+        const int y1 = std::min(image_height, region.y + region.height + 1);
 
-    offset = Coordinate<int>{x0, y0};
-    boundary.width = boundary_width;
-    boundary.height = boundary_height;
-    boundary.data.resize(boundary_size);
+        const int boundary_width = x1 - x0;
+        const int boundary_height = y1 - y0;
+        const std::size_t boundary_size = static_cast<std::size_t>(boundary_width) * boundary_height;
 
-    dim3 block(16, 16);
-    dim3 grid(
-        (boundary_width + block.x - 1) / block.x,
-        (boundary_height + block.y - 1) / block.y);
+        boxes.push_back(BoundaryBox{
+            region.label,
+            x0,
+            y0,
+            boundary_width,
+            boundary_height,
+            total_boundary_pixels});
+        boundaries.push_back(PieceBoundaryMask{
+            boundary_width,
+            boundary_height,
+            total_boundary_pixels,
+            Coordinate<int>{x0, y0}});
+        total_boundary_pixels += boundary_size;
+        max_boundary_pixels = std::max(max_boundary_pixels, boundary_size);
+    }
 
-    piece_boundary_from_labels_kernel<<<grid, block>>>(
+    boundary_data.resize(total_boundary_pixels);
+    if (total_boundary_pixels == 0)
+    {
+        return;
+    }
+
+    thrust::device_vector<BoundaryBox> d_boxes(boxes.begin(), boxes.end());
+    thrust::device_vector<uint8_t> d_boundary_data(total_boundary_pixels);
+
+    const int block = 256;
+    const dim3 grid(
+        static_cast<unsigned int>((max_boundary_pixels + block - 1) / block),
+        static_cast<unsigned int>(boxes.size()));
+    piece_boundaries_from_labels_kernel<<<grid, block>>>(
         d_labels,
-        d_boundary,
+        thrust::raw_pointer_cast(d_boxes.data()),
+        thrust::raw_pointer_cast(d_boundary_data.data()),
         image_width,
-        image_height,
-        region.label,
-        x0,
-        y0,
-        boundary_width,
-        boundary_height);
+        image_height);
     CUDA_CHECK(cudaGetLastError());
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     CUDA_CHECK(cudaMemcpy(
-        boundary.data.data(),
-        d_boundary,
-        boundary_size * sizeof(uint8_t),
+        boundary_data.data(),
+        thrust::raw_pointer_cast(d_boundary_data.data()),
+        total_boundary_pixels * sizeof(uint8_t),
         cudaMemcpyDeviceToHost));
 }

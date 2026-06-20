@@ -355,13 +355,11 @@ PipelineResult run_cuda(const PipelineOptions &options)
     thrust::copy(rgb.get(), rgb.get() + total_pixels * 3, d_rgb.begin());
     thrust::device_vector<uint8_t> d_cleaned(static_cast<size_t>(total_pixels));
     thrust::device_vector<int> d_compact_labels(static_cast<size_t>(total_pixels));
-    thrust::device_vector<uint8_t> d_piece_boundary(static_cast<size_t>(total_pixels));
 
     // Get device Pointers for the device vectors
     uint8_t *d_rgb_ptr = thrust::raw_pointer_cast(d_rgb.data());
     uint8_t *d_cleaned_ptr = thrust::raw_pointer_cast(d_cleaned.data());
     int *d_compact_labels_ptr = thrust::raw_pointer_cast(d_compact_labels.data());
-    uint8_t *d_piece_boundary_ptr = thrust::raw_pointer_cast(d_piece_boundary.data());
 
     // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[cuda pipeline] preprocessing and cleaning");
@@ -379,13 +377,12 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] connected components");
     time_stage("Connected components", result.timings.connected_components, [&]()
                {
-        (void)connected_components_buf_cuda_device(
+        connected_components_buf_cuda_device(
             d_cleaned_ptr,
             d_compact_labels_ptr,
             width,
-            height,
-            min_region_area);
-        build_regions_from_labels_buf_cuda(
+            height);
+        build_regions_from_labels_cuda(
             d_compact_labels_ptr,
             width,
             height,
@@ -396,22 +393,25 @@ PipelineResult run_cuda(const PipelineOptions &options)
     result.pieces.reserve(regions.size());
     const PuzzleLookupTable puzzle_lookup;
 
-    for (const auto &region : regions)
-    {
-        ImageU8 piece_boundary;
-        Coordinate<int> boundary_offset{0, 0};
+    std::vector<uint8_t> piece_boundary_data;
+    std::vector<PieceBoundaryMask> piece_boundaries;
 
-        // STEP 4: Extract piece boundary from the compact label image
-        debug_print("[cuda pipeline] extracting piece boundary: " + std::to_string(region.label));
-        time_stage("Boundary extraction", result.timings.boundary_extraction, [&]()
-                   { get_piece_boundary_mask_from_labels_cuda(
-                         d_compact_labels_ptr,
-                         region,
-                         d_piece_boundary_ptr,
-                         width,
-                         height,
-                         piece_boundary,
-                         boundary_offset); });
+    // STEP 4: Extract all cropped piece boundaries from the compact label image
+    debug_print("[cuda pipeline] extracting piece boundaries");
+    time_stage("Boundary extraction", result.timings.boundary_extraction, [&]()
+               { get_piece_boundary_masks_from_labels_cuda(
+                     d_compact_labels_ptr,
+                     regions,
+                     width,
+                     height,
+                     piece_boundary_data,
+                     piece_boundaries); });
+
+    for (std::size_t region_idx = 0; region_idx < regions.size(); ++region_idx)
+    {
+        const Region &region = regions[region_idx];
+        const PieceBoundaryMask &piece_boundary = piece_boundaries[region_idx];
+        const uint8_t *piece_boundary_ptr = piece_boundary_data.data() + piece_boundary.data_offset;
 
         PuzzlePiece piece;
         piece.region = region;
@@ -421,13 +421,13 @@ PipelineResult run_cuda(const PipelineOptions &options)
         time_stage("Contour extraction", result.timings.contour_extraction, [&]()
                    {
             find_contour_chain_approx_simple_cuda(
-                piece_boundary.data,
+                piece_boundary_ptr,
                 piece_boundary.width,
                 piece_boundary.height,
                 piece.contour);
             for (Coordinate<int>& point : piece.contour) {
-                point.a += boundary_offset.a;
-                point.b += boundary_offset.b;
+                point.a += piece_boundary.image_offset.a;
+                point.b += piece_boundary.image_offset.b;
             } });
 
         CoordinateVector<int> smoothed_contour;

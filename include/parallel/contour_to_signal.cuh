@@ -12,12 +12,24 @@ void trace_contour_cuda(
     int height,
     CoordinateVector<int> &result);
 
+void trace_contour_cuda(
+    const uint8_t *boundary,
+    int width,
+    int height,
+    CoordinateVector<int> &result);
+
 // inherently sequential, identical to serial implementation
 void simplify_chain_approx_cuda(CoordinateVector<int> &contour);
 
 // sequential tracing + parallel coordinate swap via thrust::transform
 void find_contour_chain_approx_simple_cuda(
     const std::vector<uint8_t> &boundary,
+    int width,
+    int height,
+    CoordinateVector<int> &result);
+
+void find_contour_chain_approx_simple_cuda(
+    const uint8_t *boundary,
     int width,
     int height,
     CoordinateVector<int> &result);

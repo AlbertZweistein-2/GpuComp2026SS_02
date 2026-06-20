@@ -25,7 +25,7 @@
 // or splitting the image into chunks and separately doing contour tracing
 // all leads to messy reordering and stitching of contours
 // so very complex for very little speedup
-void trace_contour_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
+void trace_contour_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
 {
 
     // Goes from top-left to bottom-right to find the first nonzero pixel
@@ -120,6 +120,11 @@ void trace_contour_cuda(const std::vector<uint8_t> &boundary, int width, int hei
     }
 }
 
+void trace_contour_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
+{
+    trace_contour_cuda(boundary.data(), width, height, result);
+}
+
 // ______________________________________________________________________________________________
 
 // Removes unnecessary points along straight lines, we only need the corners
@@ -183,7 +188,7 @@ struct swap_ab
 // Just a function to first call the two previous functions
 // for contour tracing and simplification
 // and then swaps the coordinates from (y, x) back to (x, y) just like in the original python code
-void find_contour_chain_approx_simple_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
+void find_contour_chain_approx_simple_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
 {
     // just calling the two previous functions
     trace_contour_cuda(boundary, width, height, result);
@@ -197,6 +202,11 @@ void find_contour_chain_approx_simple_cuda(const std::vector<uint8_t> &boundary,
     thrust::device_vector<Coordinate<int>> d_contour = result;
     thrust::transform(d_contour.begin(), d_contour.end(), d_contour.begin(), swap_ab());
     thrust::copy(d_contour.begin(), d_contour.end(), result.begin());
+}
+
+void find_contour_chain_approx_simple_cuda(const std::vector<uint8_t> &boundary, int width, int height, CoordinateVector<int> &result)
+{
+    find_contour_chain_approx_simple_cuda(boundary.data(), width, height, result);
 }
 
 // ______________________________________________________________________________________________

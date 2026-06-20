@@ -45,7 +45,6 @@ SRCS=(
     src/parallel/boundary_extraction.cu
     src/parallel/cleaning.cu
     src/parallel/component_labeling.cu
-    src/parallel/component_labeling_buf.cu
     src/parallel/contour_to_signal.cu
     src/parallel/preprocessing.cu
     src/parallel/signal_analysis.cu

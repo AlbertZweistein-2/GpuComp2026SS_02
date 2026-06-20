@@ -1,15 +1,23 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "types.hpp"
 
-void get_piece_boundary_mask_from_labels_cuda(
-    const int* d_labels,
-    const Region& region,
-    uint8_t* d_boundary,
+struct PieceBoundaryMask
+{
+    int width;
+    int height;
+    std::size_t data_offset;
+    Coordinate<int> image_offset;
+};
+
+void get_piece_boundary_masks_from_labels_cuda(
+    const int *d_labels,
+    const std::vector<Region> &regions,
     int image_width,
     int image_height,
-    ImageU8& boundary,
-    Coordinate<int>& offset
-);
+    std::vector<uint8_t> &boundary_data,
+    std::vector<PieceBoundaryMask> &boundaries);
