@@ -68,13 +68,15 @@ void test_draw_piece_overlays(bool save_output = false)
     if (save_output)
     {
         const std::string output_path = "data/pipeline_output/test_visualization_output.png";
-        draw_piece_overlays(rgb.data(), width, height, pieces, output_path);
+        std::vector<uint8_t> overlay = render_piece_overlays(rgb.data(), width, height, pieces);
+        write_overlay_image(output_path, width, height, overlay);
         std::cout << "Output saved to: " << output_path << std::endl;
     }
     else
     {
         // run without saving, just verify it does not crash
-        draw_piece_overlays(rgb.data(), width, height, pieces, "");
+        std::vector<uint8_t> overlay = render_piece_overlays(rgb.data(), width, height, pieces);
+        assert(overlay.size() == rgb.size());
     }
 
     std::cout << "test_draw_piece_overlays passed!" << std::endl;

@@ -220,7 +220,7 @@ namespace
 
         if (write_header)
         {
-            csv << "resolution,image,pieces,run,total_ms,image_loading_ms,preprocessing_ms,"
+            csv << "resolution,image,pieces,run,total_ms,preprocessing_ms,"
                 << "connected_components_ms,boundary_extraction_ms,contour_extraction_ms,"
                 << "contour_smoothing_ms,enclosing_circle_ms,radial_signal_ms,"
                 << "signal_smoothing_ms,peak_detection_ms,edge_classification_ms,"
@@ -238,7 +238,6 @@ namespace
             << run << ','
             << std::fixed << std::setprecision(3)
             << milliseconds(result.timings.total_seconds) << ','
-            << milliseconds(result.timings.image_loading) << ','
             << milliseconds(result.timings.preprocessing) << ','
             << milliseconds(result.timings.connected_components) << ','
             << milliseconds(result.timings.boundary_extraction) << ','
@@ -301,7 +300,6 @@ namespace
         print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
         std::vector<std::pair<std::string_view, double>> stage_timings = {
-            {"Image loading", results.timings.image_loading},
             {"Preprocessing", results.timings.preprocessing},
             {"Connected components", results.timings.connected_components},
             {"Boundary extraction", results.timings.boundary_extraction},
@@ -335,10 +333,8 @@ namespace
 
 PipelineResult run_cuda(const PipelineOptions &options)
 {
-    Timer total_timer;
-    total_timer.reset();
-
     const fs::path input_image_path = project_path(options.input_image_path);
+
     PipelineResult result;
 
     // STEP 1: Load input image
@@ -346,11 +342,13 @@ PipelineResult run_cuda(const PipelineOptions &options)
     int width = 0;
     int height = 0;
     std::unique_ptr<uint8_t, decltype(&stbi_image_free)> rgb(nullptr, stbi_image_free);
-    time_stage("Image loading", result.timings.image_loading, [&]()
-               { rgb.reset(load_rgb_image(input_image_path, width, height)); });
+    rgb.reset(load_rgb_image(input_image_path, width, height));
+    
+    Timer total_timer;
+    total_timer.reset();
 
     const int total_pixels = width * height;
-    const int min_region_area = scaled_min_region_area(width);
+    const int min_region_area = scaled_min_region_area(height);
 
     thrust::device_vector<uint8_t> d_cleaned(static_cast<size_t>(total_pixels));
     thrust::device_vector<int> d_compact_labels(static_cast<size_t>(total_pixels));
@@ -481,19 +479,21 @@ PipelineResult run_cuda(const PipelineOptions &options)
     }
 
     // STEP 12: Draw final contour and bounding-box overlay image
+    std::vector<uint8_t> overlay_image;
     time_stage("Visualization", result.timings.visualization, [&]()
                {
-        const fs::path output_dir = project_path(options.output_dir);
-        fs::create_directories(output_dir);
-        const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_cuda_overlays.bmp");
-        parallel_visualization::draw_piece_overlays(
+        overlay_image = parallel_visualization::render_piece_overlays(
             rgb.get(),
             width,
             height,
-            result.pieces,
-            overlay_path.string()); });
+            result.pieces); });
 
     result.timings.total_seconds = total_timer.get();
+
+    const fs::path output_dir = project_path(options.output_dir);
+    fs::create_directories(output_dir);
+    const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_cuda_overlays.bmp");
+    parallel_visualization::write_overlay_image(overlay_path.string(), width, height, overlay_image);
 
 #if PERSIST_TIMINGS >= 1
     append_timings_csv(options, result, width, height);

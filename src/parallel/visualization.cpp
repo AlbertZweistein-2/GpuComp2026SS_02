@@ -236,30 +236,27 @@ bool has_extension(const std::string& path, const std::string& extension)
                       });
 }
 
-int write_overlay_image(const std::string& output_path, int width, int height, const std::vector<uint8_t>& img)
-{
-    if (has_extension(output_path, ".bmp"))
-    {
-        NvtxRange range("Visualization: write BMP");
-        return stbi_write_bmp(output_path.c_str(), width, height, 3, img.data());
-    }
-
-    NvtxRange range("Visualization: write PNG");
-    return stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
-}
-
-// ______________________________________________________________________________________________
-
 } // namespace
 
 namespace parallel_visualization {
 
-void draw_piece_overlays(
+int write_overlay_image(const std::string& output_path, int width, int height, const std::vector<uint8_t>& img)
+{
+    if (has_extension(output_path, ".bmp"))
+    {
+        NvtxRange range("Image store: write BMP");
+        return stbi_write_bmp(output_path.c_str(), width, height, 3, img.data());
+    }
+
+    NvtxRange range("Image store: write PNG");
+    return stbi_write_png(output_path.c_str(), width, height, 3, img.data(), width * 3);
+}
+
+std::vector<uint8_t> render_piece_overlays(
     const uint8_t* rgb_data,
     int width,
     int height,
-    const std::vector<PuzzlePiece>& pieces,
-    const std::string& output_path)
+    const std::vector<PuzzlePiece>& pieces)
 {
     //Scaling font size and padding to the image resolution
     const float label_font_size = 50.0f * (static_cast<float>(height) / 5100.0f); // 5100 is the height of the original image used for scaling
@@ -335,11 +332,7 @@ void draw_piece_overlays(
         }
     }
 
-    // saving output image if path is provided
-    if (!output_path.empty())
-    {
-        write_overlay_image(output_path, width, height, img);
-    }
+    return img;
 }
 
 } // namespace parallel_visualization

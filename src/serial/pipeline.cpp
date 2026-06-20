@@ -177,7 +177,7 @@ void append_timings_csv(const PipelineOptions& options, const PipelineResult& re
     }
 
     if (write_header) {
-        csv << "resolution,image,pieces,run,total_ms,image_loading_ms,preprocessing_ms,"
+        csv << "resolution,image,pieces,run,total_ms,preprocessing_ms,"
             << "connected_components_ms,boundary_extraction_ms,contour_extraction_ms,"
             << "contour_smoothing_ms,enclosing_circle_ms,radial_signal_ms,"
             << "signal_smoothing_ms,peak_detection_ms,edge_classification_ms,"
@@ -195,7 +195,6 @@ void append_timings_csv(const PipelineOptions& options, const PipelineResult& re
         << run << ','
         << std::fixed << std::setprecision(3)
         << milliseconds(result.timings.total_seconds) << ','
-        << milliseconds(result.timings.image_loading) << ','
         << milliseconds(result.timings.preprocessing) << ','
         << milliseconds(result.timings.connected_components) << ','
         << milliseconds(result.timings.boundary_extraction) << ','
@@ -254,7 +253,6 @@ void print_summary(const PipelineOptions& options, const PipelineResult& results
     print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
     std::vector<std::pair<std::string_view, double>> stage_timings = {
-        {"Image loading", results.timings.image_loading},
         {"Preprocessing", results.timings.preprocessing},
         {"Connected components", results.timings.connected_components},
         {"Boundary extraction", results.timings.boundary_extraction},
@@ -284,9 +282,6 @@ void print_summary(const PipelineOptions& options, const PipelineResult& results
 
 PipelineResult run(const PipelineOptions& options)
 {
-    Timer total_timer;
-    total_timer.reset();
-
     const fs::path input_image_path = project_path(options.input_image_path);
     PipelineResult result;
 
@@ -295,9 +290,11 @@ PipelineResult run(const PipelineOptions& options)
     int width = 0;
     int height = 0;
     uint8_t* rgb = nullptr;
-    time_stage(result.timings.image_loading, [&]() {
-        rgb = load_rgb_image(input_image_path, width, height);
-    });
+    rgb = load_rgb_image(input_image_path, width, height);
+
+    Timer total_timer;
+    total_timer.reset();
+
     ImageU8 cleaned;
     const int min_region_area = scaled_min_region_area(height);
 
@@ -406,15 +403,18 @@ PipelineResult run(const PipelineOptions& options)
     }
 
     // STEP 12: Draw final contour and bounding-box overlay image
+    std::vector<uint8_t> overlay_image;
     time_stage(result.timings.visualization, [&]() {
-        const fs::path output_dir = project_path(options.output_dir);
-        fs::create_directories(output_dir);
-        const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.bmp");
-        draw_piece_overlays(rgb, width, height, result.pieces, overlay_path.string());
+        overlay_image = render_piece_overlays(rgb, width, height, result.pieces);
     });
-    stbi_image_free(rgb);
 
     result.timings.total_seconds = total_timer.get();
+
+    const fs::path output_dir = project_path(options.output_dir);
+    fs::create_directories(output_dir);
+    const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.bmp");
+    write_overlay_image(overlay_path.string(), width, height, overlay_image);
+    stbi_image_free(rgb);
 
 #if PERSIST_TIMINGS >= 1
     append_timings_csv(options, result, width, height);

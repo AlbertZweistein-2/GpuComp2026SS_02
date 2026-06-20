@@ -10,7 +10,6 @@
 #include "types.hpp"
 
 struct PipelineTimings {
-    double image_loading = 0.0;
     double preprocessing = 0.0;
     double connected_components = 0.0;
     double boundary_extraction = 0.0;
