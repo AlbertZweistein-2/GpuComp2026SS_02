@@ -1,0 +1,2 @@
+resolution,image,pieces,run,total_ms,preprocessing_ms,connected_components_ms,boundary_extraction_ms,contour_extraction_ms,contour_smoothing_ms,enclosing_circle_ms,radial_signal_ms,signal_smoothing_ms,peak_detection_ms,edge_classification_ms,visualization_ms
+1024x1409,31_19_p2.jpg,31,1,69.231,54.810,4.907,0.723,1.168,0.057,0.008,0.001,0.077,0.097,0.006,6.765

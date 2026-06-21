@@ -6,6 +6,9 @@ venv/
 .ipynb_checkpoints/
 **/.ipynb_checkpoints/
 
+# Bitmap images are too large
+*.bmp
+
 # macOS
 .DS_Store
 
