@@ -1,19 +1,29 @@
+// ----------------------------------------------------------------------
+// HEADER INCLUDES
 #include "parallel/boundary_extraction.cuh"
-
+// ----------------------------------------------------------------------
+// STANDARD LIBRARY INCLUDES
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-
+// ----------------------------------------------------------------------
+// GPU SPECIFIC INCLUDES
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
+// ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// PROJECT INCLUDES
 #include "helpers.hpp"
+// ----------------------------------------------------------------------
 
 namespace
 {
+// ----------------------------------------------------------------------
+// DEVICE HELPERS
 // Checks whether a pixel belongs to the requested component and touches
 // background or another component in its 8-neighborhood.
 // Such pixels form the outer boundary mask for that piece.
@@ -52,11 +62,16 @@ __device__ bool is_piece_boundary_pixel(
 
     return false;
 }
+// ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// BATCHED BOUNDARY KERNEL
 // Batched boundary extraction.
 // blockIdx.y selects the piece; blockIdx.x/threadIdx.x walk that piece's
 // cropped bounding box. Boundary pixels are written into the flat mask buffer
 // at the precomputed offset for the selected piece.
+// Processing all boxes in one 2D launch avoids one kernel launch per detected
+// piece and keeps the per-piece metadata compact in a device-side box array.
 __global__ void fill_piece_boundary_masks_kernel(
     const int *labels,
     const BoundaryBox *boxes,
@@ -81,8 +96,13 @@ __global__ void fill_piece_boundary_masks_kernel(
         boundary_data[box.data_offset + local_idx] = 255;
     }
 }
+// ----------------------------------------------------------------------
 } // namespace
 
+// ----------------------------------------------------------------------
+// BUILD BOUNDARY EXTRACTION PLAN
+// Expand each region by one pixel where possible so the boundary test can see
+// neighboring background/component labels at crop edges.
 BoundaryExtractionPlan build_boundary_extraction_plan(
     const std::vector<Region> &regions,
     int image_width,
@@ -123,7 +143,13 @@ BoundaryExtractionPlan build_boundary_extraction_plan(
 
     return plan;
 }
+// ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// CUDA SCRATCH ALLOCATION
+// Upload crop boxes once and allocate one flat device mask buffer for all
+// pieces. A flat buffer keeps the later host contour extraction simple and
+// avoids many small device allocations.
 void allocate_boundary_extraction_cuda_scratch(
     const BoundaryExtractionPlan &plan,
     BoundaryExtractionCudaScratch &scratch)
@@ -131,7 +157,13 @@ void allocate_boundary_extraction_cuda_scratch(
     scratch.boxes = plan.boxes;
     scratch.boundary_data.resize(plan.total_boundary_pixels);
 }
+// ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// MAIN BOUNDARY EXTRACTION FUNCTION
+// Produce cropped binary boundary masks from the compact label image. The result
+// is copied back to host because Moore tracing currently needs connected
+// contour order and runs on the CPU.
 void extract_piece_boundary_masks_from_labels_cuda(
     const int *d_labels,
     const BoundaryExtractionPlan &plan,
@@ -168,3 +200,4 @@ void extract_piece_boundary_masks_from_labels_cuda(
     boundary_data.resize(plan.total_boundary_pixels);
     thrust::copy(scratch.boundary_data.begin(), scratch.boundary_data.end(), boundary_data.begin());
 }
+// ----------------------------------------------------------------------

@@ -1,19 +1,37 @@
+// ----------------------------------------------------------------------
+// HEADER INCLUDES
 #include "parallel/cleaning.cuh"
 #include "helpers.hpp"
-
+// ----------------------------------------------------------------------
+// STANDARD LIBRARY INCLUDES
 #include <cstddef>
 #include <cstdint>
-
+// ----------------------------------------------------------------------
+// GPU SPECIFIC INCLUDES
 #include <cuda_runtime.h>
+// ----------------------------------------------------------------------
 
 namespace
 {
+// ----------------------------------------------------------------------
+// CLEANING CONSTANTS
+// Morphological opening uses a fixed 5x5 structuring element: erosion removes
+// small foreground noise, and dilation restores the surviving piece regions.
 constexpr int MORPH_KERNEL_WIDTH = 5;
 constexpr int MORPH_KERNEL_HEIGHT = 5;
 constexpr int MORPH_RADIUS_X = MORPH_KERNEL_WIDTH / 2;
 constexpr int MORPH_RADIUS_Y = MORPH_KERNEL_HEIGHT / 2;
+// ----------------------------------------------------------------------
 } // namespace
 
+// ----------------------------------------------------------------------
+// STEP 5a: Binarize and erode
+// Load a halo tile into shared memory, threshold the blurred grayscale values,
+// then keep only pixels whose full 5x5 neighborhood is foreground.
+// Binarization is fused into this erosion kernel to avoid an extra full-image
+// kernel launch and intermediate global-memory pass.
+// The shared-memory halo tile lets neighboring threads reuse thresholded pixels
+// instead of rereading the same 5x5 neighborhoods from global memory.
 __global__ void binarize_erode_tiled_kernel(
     const float *input,
     const float *threshold,
@@ -73,7 +91,14 @@ __global__ void binarize_erode_tiled_kernel(
 
     output[y * width + x] = all_foreground ? 255 : 0;
 }
+// ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// STEP 5b: Dilate
+// Load the eroded binary mask into a halo tile, then restore every pixel that
+// touches foreground within the 5x5 structuring element.
+// This uses the same shared-memory tiling strategy as erosion to reduce repeated
+// global reads during the neighborhood scan.
 __global__ void dilate_tiled_kernel(
     const uint8_t *input,
     uint8_t *output,
@@ -131,7 +156,14 @@ __global__ void dilate_tiled_kernel(
 
     output[y * width + x] = any_foreground ? 255 : 0;
 }
+// ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// DEVICE LAUNCH WRAPPERS
+// Launch the threshold+erosion kernel with enough dynamic shared memory for
+// each block tile plus its halo.
+// The wrappers keep the block geometry and shared-memory byte calculation in
+// one place so both morphology stages use matching tile layouts.
 static void binarize_erode_cuda_device(
     const float *d_input,
     const float *d_threshold,
@@ -156,6 +188,7 @@ static void binarize_erode_cuda_device(
     CUDA_CHECK(cudaGetLastError());
 }
 
+// Launch the dilation kernel with the same tile geometry as erosion.
 static void dilate_cuda_device(
     const uint8_t *d_input,
     uint8_t *d_output,
@@ -177,7 +210,12 @@ static void dilate_cuda_device(
         height);
     CUDA_CHECK(cudaGetLastError());
 }
+// ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// MAIN CLEANING FUNCTION
+// Run morphological opening entirely on device memory. Preprocessing provides
+// the blurred image and threshold, and connected components consume d_output.
 void binarize_morphological_open_cuda_device(
     const float *d_input,
     const float *d_threshold,
@@ -197,5 +235,5 @@ void binarize_morphological_open_cuda_device(
         d_output,
         width,
         height);
-
 }
+// ----------------------------------------------------------------------

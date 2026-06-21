@@ -1,3 +1,5 @@
+// ----------------------------------------------------------------------
+// COMPILE FLAGS
 #ifndef DEBUG_LEVEL
 #define DEBUG_LEVEL 0
 #endif
@@ -9,9 +11,19 @@
 #ifndef PERSIST_TIMINGS
 #define PERSIST_TIMINGS 0
 #endif
-
+// ----------------------------------------------------------------------
+// HEADER INCLUDES
 #include "serial/pipeline.hpp"
-
+#include "helpers.hpp"
+#include "serial/boundary_extraction.hpp"
+#include "serial/component_labeling.hpp"
+#include "serial/contour_to_signal.hpp"
+#include "serial/preprocessing.hpp"
+#include "serial/signal_analysis.hpp"
+#include "serial/visualization.hpp"
+#include "stb_image.h"
+// ----------------------------------------------------------------------
+// STANDARD LIBRARY INCLUDES
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -23,20 +35,14 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#include "helpers.hpp"
-#include "serial/boundary_extraction.hpp"
-#include "serial/component_labeling.hpp"
-#include "serial/contour_to_signal.hpp"
-#include "serial/preprocessing.hpp"
-#include "serial/signal_analysis.hpp"
-#include "serial/visualization.hpp"
-#include "stb_image.h"
+// ----------------------------------------------------------------------
 
 namespace fs = std::filesystem;
 
 namespace {
 
+// Naive serial baseline parameters. These intentionally stay close to the CUDA
+// pipeline constants so behavior and timings can be compared stage by stage.
 constexpr int GAUSSIAN_KERNEL_SIZE = 5;
 constexpr float GAUSSIAN_SIGMA = 1.0f;
 constexpr int MIN_REGION_AREA = 2000;
@@ -48,18 +54,24 @@ constexpr int PEAK_MIN_DISTANCE = 5;
 constexpr float EDGE_TOL_FACTOR = 0.1f;
 constexpr double REFERENCE_IMAGE_HEIGHT = 5100.0;
 
+// Scale the minimum region area based on input height. Area scales
+// quadratically, so the threshold remains comparable across image resolutions.
 int scaled_min_region_area(int height)
 {
     const double scale = static_cast<double>(height) / REFERENCE_IMAGE_HEIGHT;
     return std::max(1, static_cast<int>(MIN_REGION_AREA * scale * scale + 0.5));
 }
 
+// Resolve CLI/default paths relative to the current project directory while
+// still accepting absolute paths from scripts.
 fs::path project_path(const std::string& path)
 {
     fs::path p(path);
     return p.is_absolute() ? p : fs::current_path() / p;
 }
 
+// Measure a stage when timing is enabled. The function call itself remains the
+// same in non-timing builds, keeping the serial baseline simple.
 template <typename Fn>
 void time_stage(double& seconds, Fn&& fn)
 {
@@ -73,6 +85,7 @@ void time_stage(double& seconds, Fn&& fn)
 #endif
 }
 
+// Debug print function controlled by DEBUG_LEVEL compile flag.
 #if DEBUG_LEVEL >= 1
 void debug_print(std::string_view message)
 {
@@ -82,6 +95,8 @@ void debug_print(std::string_view message)
 #define debug_print(message) ((void)0)
 #endif
 
+// Load an RGB image from a file using stb_image.h. Forcing three channels keeps
+// the serial and CUDA preprocessing entry points consistent.
 uint8_t* load_rgb_image(const fs::path& path, int& width, int& height)
 {
     int channels = 0;
@@ -92,6 +107,7 @@ uint8_t* load_rgb_image(const fs::path& path, int& width, int& height)
     return data;
 }
 
+// Convert the file extension to lowercase for case-insensitive image filtering.
 std::string lowercase_extension(const fs::path& path)
 {
     std::string extension = path.extension().string();
@@ -101,6 +117,7 @@ std::string lowercase_extension(const fs::path& path)
     return extension;
 }
 
+// Check if a file has a supported image extension.
 bool is_supported_image_file(const fs::path& path)
 {
     if (!fs::is_regular_file(path)) {
@@ -115,6 +132,7 @@ bool is_supported_image_file(const fs::path& path)
            extension == ".tga";
 }
 
+// Collect supported images in deterministic order for repeatable benchmarks.
 std::vector<fs::path> collect_images(const fs::path& directory)
 {
     std::vector<fs::path> images;
@@ -129,6 +147,7 @@ std::vector<fs::path> collect_images(const fs::path& directory)
 }
 
 #if PERSIST_TIMINGS >= 1
+// CSV helpers are compiled only when timing persistence is requested.
 std::string env_or_empty(const char* name)
 {
     const char* value = std::getenv(name);
@@ -144,6 +163,8 @@ fs::path timings_csv_path(const PipelineOptions& options)
 {
     const std::string configured_path = env_or_empty("PIPELINE_TIMINGS_CSV");
     if (!configured_path.empty()) {
+        // Allows benchmark scripts to collect timings outside the normal output
+        // directory.
         return project_path(configured_path);
     }
     return project_path(options.output_dir) / "serial_timings.csv";
@@ -187,6 +208,8 @@ void append_timings_csv(const PipelineOptions& options, const PipelineResult& re
     const std::string pieces = csv_value_or_fallback(
         env_or_empty("PIPELINE_TIMING_PIECES"),
         std::to_string(result.pieces.size()));
+    // `run` and `pieces` can be supplied by benchmark scripts so repeated runs
+    // can be grouped without changing pipeline code.
     const std::string run = csv_value_or_fallback(env_or_empty("PIPELINE_TIMING_RUN"), "1");
 
     csv << image_resolution(width, height) << ','
@@ -252,6 +275,8 @@ void print_summary(const PipelineOptions& options, const PipelineResult& results
     std::cout << "\n-- Timings -------------------------------\n";
     print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
+    // Sort by stage cost like the CUDA summary so the serial bottlenecks are
+    // visible at a glance.
     std::vector<std::pair<std::string_view, double>> stage_timings = {
         {"Preprocessing", results.timings.preprocessing},
         {"Connected components", results.timings.connected_components},
@@ -292,9 +317,15 @@ PipelineResult run(const PipelineOptions& options)
     uint8_t* rgb = nullptr;
     rgb = load_rgb_image(input_image_path, width, height);
 
+    // Start wall-clock timing after image decode. The final overlay file write
+    // happens after this timer is captured, matching the CUDA pipeline timing
+    // boundary.
     Timer total_timer;
     total_timer.reset();
 
+    // Serial pipeline state. This baseline intentionally keeps simple
+    // per-stage/per-piece containers instead of the CUDA pipeline's batched
+    // scratch buffers.
     ImageU8 cleaned;
     const int min_region_area = scaled_min_region_area(height);
 
@@ -321,7 +352,9 @@ PipelineResult run(const PipelineOptions& options)
     result.pieces.reserve(regions.size());
     const PuzzleLookupTable puzzle_lookup;
 
-
+    // Naive serial baseline: process each detected region completely before
+    // moving to the next one. This keeps the implementation straightforward and
+    // makes the CUDA pipeline's batched stages easy to compare against.
     for (const auto& region : regions) {
         ImageU8 piece_boundary;
         Coordinate<int> boundary_offset{0, 0};
@@ -342,6 +375,8 @@ PipelineResult run(const PipelineOptions& options)
                 piece_boundary.width,
                 piece_boundary.height,
                 piece.contour);
+            // Boundary masks are cropped to the region. Shift contour points
+            // back into full-image coordinates for later geometry and drawing.
             for (Coordinate<int>& point : piece.contour) {
                 point.a += boundary_offset.a;
                 point.b += boundary_offset.b;
@@ -352,6 +387,8 @@ PipelineResult run(const PipelineOptions& options)
         // STEP 6: Smooth contour before signal extraction
         debug_print("[pipeline] smoothing contour: " + std::to_string(region.label));
         time_stage(result.timings.contour_smoothing, [&]() {
+            // Work on a copy so the original traced contour remains available
+            // for output and visualization.
             smoothed_contour = piece.contour;
             smooth_contour(smoothed_contour, CONTOUR_SMOOTHING_WINDOW);
         });
@@ -360,6 +397,8 @@ PipelineResult run(const PipelineOptions& options)
         // STEP 7: Approximate enclosing circle center
         debug_print("[pipeline] approximating enclosing circle: " + std::to_string(region.label));
         time_stage(result.timings.enclosing_circle, [&]() {
+            // The serial API still returns radius, but later stages only need
+            // the center for radial-signal conversion.
             float radius = 0.0f;
             enclosing_circle_approx(smoothed_contour, circle_center, radius);
         });
@@ -381,6 +420,8 @@ PipelineResult run(const PipelineOptions& options)
         // STEP 10: Detect the four corner peaks
         debug_print("[pipeline] detecting peaks: " + std::to_string(region.label));
         time_stage(result.timings.peak_detection, [&]() {
+            // Corner detection uses the smoothed radial signal, while edge
+            // classification below uses the raw radial signal.
             piece.corner_indices = find_triangular_peaks(
                 smoothed_radial_signal,
                 PEAK_MIN_PROMINENCE,
@@ -395,6 +436,8 @@ PipelineResult run(const PipelineOptions& options)
                 raw_radial_signal,
                 piece.corner_indices,
                 EDGE_TOL_FACTOR);
+            // Convert edge labels to the same rotation-invariant class string
+            // used by the CUDA pipeline.
             const std::string edge_label_string = edges_to_string(piece.edge_labels);
             piece.class_label = puzzle_lookup.getClassLabel(edge_label_string);
         });
@@ -405,6 +448,8 @@ PipelineResult run(const PipelineOptions& options)
     // STEP 12: Draw final contour and bounding-box overlay image
     std::vector<uint8_t> overlay_image;
     time_stage(result.timings.visualization, [&]() {
+        // Serial visualization returns a new image buffer, unlike the CUDA
+        // pipeline path that mutates its RGB buffer in-place.
         overlay_image = render_piece_overlays(rgb, width, height, result.pieces);
     });
 
@@ -414,6 +459,8 @@ PipelineResult run(const PipelineOptions& options)
     fs::create_directories(output_dir);
     const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_overlays.bmp");
     write_overlay_image(overlay_path.string(), width, height, overlay_image);
+    // Manual free mirrors the stb_image allocation above. The CUDA pipeline
+    // uses a unique_ptr wrapper, but this file stays intentionally low effort.
     stbi_image_free(rgb);
 
 #if PERSIST_TIMINGS >= 1
@@ -430,17 +477,23 @@ PipelineResult run(const PipelineOptions& options)
 #ifdef PIPELINE_BUILD_STANDALONE
 int main(int argc, char** argv)
 {
+    // Initialize Pipeline Options
     PipelineOptions options;
     if (argc > 1) {
+        // Read Input Path (Image or Folder)
         options.input_image_path = argv[1];
     }
     if (argc > 2) {
+        // Read Output Path
         options.output_dir = argv[2];
     }
 
     try {
+        // Load Project Path
         const fs::path input_path = project_path(options.input_image_path);
 
+        // If input path is a folder containing images, process them in
+        // deterministic order.
         if (fs::is_directory(input_path)) {
             const std::vector<fs::path> images = collect_images(input_path);
             if (images.empty()) {
@@ -449,12 +502,14 @@ int main(int argc, char** argv)
 
             debug_print("Running pipeline on " + std::to_string(images.size()) +
                         " image(s) in: " + input_path.string());
+            // Run each image through the same one-image serial pipeline.
             for (const fs::path& image_path : images) {
                 PipelineOptions image_options = options;
                 image_options.input_image_path = image_path.string();
                 (void)run(image_options);
             }
         } else if (fs::is_regular_file(input_path)) {
+            // For single image
             (void)run(options);
         } else {
             throw std::runtime_error("Input path is not a file or folder: " + input_path.string());

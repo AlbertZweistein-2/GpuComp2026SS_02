@@ -25,6 +25,8 @@
 #include "serial/cleaning.hpp"
 
 // ─── Constants (same as the CUDA implementation) ─────────────────────────────
+// Keep these local to the translation unit; the public API only needs
+// preprocess().
 static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS  = 256;
 
@@ -43,6 +45,7 @@ static void rgb_to_grayscale(
 
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
+            // Input is forced to RGB by stbi_load(..., 3) in the pipeline.
             int idx = (y * width + x) * 3;
             float r = rgb[idx];
             float g = rgb[idx + 1];
@@ -60,6 +63,8 @@ static void rgb_to_grayscale(
 // -----------------------------------------------------------------------------
 static void normalize(std::vector<float>& gray)
 {
+    // This intentionally uses two STL passes. The serial implementation is the
+    // clear baseline; the CUDA version fuses the min/max work differently.
     float gmin = *std::min_element(gray.begin(), gray.end());
     float gmax = *std::max_element(gray.begin(), gray.end());
 
@@ -88,6 +93,8 @@ static std::vector<float> make_gaussian_kernel(int ksize, float sigma)
     int half = ksize / 2;
     float sum = 0.f;
 
+    // Build the full 2D kernel directly. This keeps the serial code simple even
+    // though the Gaussian kernel is mathematically separable.
     for (int y = -half; y <= half; ++y) {
         for (int x = -half; x <= half; ++x) {
             float v = std::exp(-(x*x + y*y) / (2.f * sigma * sigma));
@@ -120,6 +127,7 @@ static void gaussian_blur(
 
     int half = ksize / 2;
 
+    // Naive nested-loop convolution: every output pixel walks the full kernel.
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             float sum = 0.f;
@@ -148,6 +156,8 @@ static void compute_histogram(
     hist.assign(HIST_BINS, 0);
 
     for (float v : gray) {
+        // Values have been normalized to [0, 255]. Clamp the upper edge so
+        // exactly-255 samples stay inside the histogram.
         int bin = static_cast<int>(std::min(v, 255.f));
         ++hist[bin];
     }
@@ -162,6 +172,7 @@ static float otsu_threshold(
         int total_pixels)
 {
     double sum_total = 0.0;
+    // Sum of all gray levels, used to derive foreground mean incrementally.
     for (int t = 0; t < HIST_BINS; ++t)
         sum_total += t * hist[t];
 
@@ -170,6 +181,8 @@ static float otsu_threshold(
     int threshold = 0;
 
     for (int t = 0; t < HIST_BINS; ++t) {
+        // Sweep the threshold from dark to bright while maintaining background
+        // weight and sum. Foreground values are implied by totals.
         w_bg += hist[t];
         if (w_bg == 0.0) continue;
 
@@ -199,6 +212,7 @@ static void binarize(
 {
     binary.resize(gray.size());
 
+    // Foreground is 255 and background is 0, matching the morphology code.
     for (size_t i = 0; i < gray.size(); ++i)
         binary[i] = (gray[i] > threshold) ? 255u : 0u;
 }
@@ -217,6 +231,9 @@ void preprocess(
 {
     result.width = width;
     result.height = height;
+
+    // The serial baseline keeps each intermediate as a normal host vector.
+    // This is intentionally easy to inspect rather than memory-optimal.
 
     // 1 — RGB -> Grayscale
     std::vector<float> gray;
@@ -247,5 +264,6 @@ void preprocess(
     binary_image.height = height;
     binary_image.data = std::move(binary);
 
+    // Cleaning is split into its own file to mirror the CUDA pipeline modules.
     morphological_open(binary_image, result);
 }

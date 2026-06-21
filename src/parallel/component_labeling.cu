@@ -1,45 +1,4 @@
 
-// @Anantha
-// Yes, but cite the paper as the main justification, not GitHub alone.
-// Use:
-// Stefano Allegretti, Federico Bolelli, Michele Cancilla, Costantino Grana, “A Block-Based Union-Find Algorithm to Label Connected Components on GPUs”, ICIAP 2019.
-// YACCLAB GitHub repository as reference implementation / benchmark framework.
-// Good wording for your report:
-// We replaced iterative label propagation with a Block-Based Union-Find (BUF) connected-component labeling algorithm following Allegretti et al. 
-// BUF is designed for GPU-based 8-connectivity CCL and uses 2x2 pixel blocks instead of per-pixel labels, 
-// reducing temporary labels, memory accesses, and union-find work. The authors report improved performance over previous GPU CCL methods, 
-// and the implementation is available in the YACCLAB benchmark suite.
-
-// Important nuance: our current component labeling is based on the BUF idea, but it is not yet a literal copy of Algorithm 2’s optimized bitmask merge. 
-// So describe it as:
-// “a BUF-inspired block-based union-find implementation”
-
-// unless we fully match their bitset neighborhood mask logic. That is still valid, but more honest technically.
-
-// But we need a way to reason how we came up with this shit
-
-// Yes. The reasoning chain is defensible:
-// The profiler showed propagate_labels_kernel was called many times.
-
-// Looking at the old implementation, each foreground pixel started with its own label, then each kernel launch only propagated 
-// the minimum label to immediate neighbors. That means labels spread across a component roughly one pixel per iteration. 
-// For large puzzle pieces, this becomes many full-image passes.
-
-// This matches the paper’s related-work discussion: label-equivalence / propagation-style GPU CCL methods repeatedly propagate labels 
-// or resolve equivalences, which is exactly the bad behavior we saw.
-
-// The natural fix is union-find: instead of letting labels slowly diffuse through the image, 
-// directly merge equivalent labels into component trees, then compress the trees.
-
-// The first union-find version still worked per pixel, so it reduced launch count but still had many labels, 
-// many memory accesses, and many atomic operations.
-
-// Allegretti et al. propose Block-Based Union-Find for 8-connectivity, using the fact that all foreground pixels inside a 2x2 block are connected. 
-// Therefore, the algorithm can operate mostly on block labels instead of pixel labels.
-
-// Our problem also uses binary image CCL with 8-connectivity, so BUF fits the exact structure of the task.
-
-// Report wording:
 // Profiling showed that connected-component labeling was dominated by repeated label propagation. 
 // The original implementation used an iterative relaxation scheme where labels moved only through local neighborhoods, 
 // requiring many full-image kernel launches for large components. We therefore looked for GPU CCL algorithms that avoid iterative propagation. 

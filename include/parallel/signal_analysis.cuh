@@ -10,14 +10,17 @@
 
 struct SignalCudaScratch
 {
-    // Device copy of the smoothed batched signal. Peak detection reuses this
-    // directly instead of uploading host signal data again.
+    // Device copy of the smoothed batched signal. Peak detection consumes this
+    // directly, while the host copy is kept for the CPU-only peak scoring pass.
     thrust::device_vector<float> smoothed;
-    // Local-maxima mask reused by batched peak detection.
+    // Flat local-maxima mask matching the radial-signal offsets/lengths layout:
+    // index offsets[piece] + local_i belongs to that piece's local sample.
     thrust::device_vector<int> peak_mask;
 };
 
-// Smooths all radial signal slices in one launch using contour offsets/lengths.
+// Smooths all radial signal slices in one 2D launch using contour offsets/lengths.
+// The returned host copy is intentionally kept because CPU peak scoring still
+// needs random access to the smoothed signal.
 void smooth_signals_batched_cuda(
     const thrust::device_vector<float> &d_signal,
     const thrust::device_vector<int> &offsets,
@@ -27,7 +30,8 @@ void smooth_signals_batched_cuda(
     Signal &smoothed,
     SignalCudaScratch &scratch);
 
-// Partially parallelized: local maxima are found on GPU, peak filtering stays on CPU.
+// Partially parallelized: local maxima are found on GPU, while prominence,
+// sharpness, and final four-corner selection stay on CPU.
 void find_triangular_peaks_batched_cuda(
     const Signal &smooth,
     const thrust::device_vector<float> &d_smooth,
@@ -42,7 +46,9 @@ void find_triangular_peaks_batched_cuda(
     int min_distance,
     std::vector<Corners> &corners);
 
-// Batched CPU classification over flat radial signal slices.
+// Batched CPU classification over flat radial signal slices. A GPU version was
+// tested but its launch and tiny copy overhead outweighed the removed raw-signal
+// copy for the current piece counts.
 void classify_edges_batched_cuda(
     const Signal &raw,
     const std::vector<int> &offsets,
@@ -54,6 +60,7 @@ void classify_edges_batched_cuda(
 // Inherently sequential, identical to serial implementation.
 std::string edges_to_string_cuda(const EdgeLabels &labels);
 
+// Maps the four-edge string to a rotation-invariant puzzle-piece class label.
 class PuzzleLookupTable
 {
 public:
@@ -62,6 +69,7 @@ public:
     std::string getClassLabel(const std::string &edges) const;
 
 private:
+    // 3^4 possible strings because each of four edges has L/V/C state.
     std::array<std::string, 81> table;
 
     int charToDigit(char c) const;

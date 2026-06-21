@@ -69,6 +69,9 @@ namespace
             bool found = false;
             for (int i = 0; i < 8; ++i)
             {
+                // Resume the Moore-neighborhood scan relative to the previous
+                // direction so the trace follows the boundary instead of
+                // repeatedly restarting from the same neighbor.
                 const int dir_idx = (prev_dir + i) % 8;
                 const int ny = current.a + dy[dir_idx];
                 const int nx = current.b + dx[dir_idx];
@@ -125,6 +128,8 @@ namespace
             const int dx2 = std::clamp(x2 - x1, -1, 1);
             const int dy2 = std::clamp(y2 - y1, -1, 1);
 
+            // Keep only points where the chain direction changes. This reduces
+            // downstream GPU work without changing the contour order.
             if (dx1 != dx2 || dy1 != dy2)
             {
                 simplified.push_back(contour[i]);
@@ -138,6 +143,8 @@ namespace
 
 void find_contour_chain_approx_simple_cuda(const uint8_t *boundary, int width, int height, CoordinateVector<int> &result)
 {
+    // Contour extraction stays on CPU because the next contour point depends on
+    // the previous point. Later stages batch all extracted contours for CUDA.
     trace_contour(boundary, width, height, result);
     simplify_chain_approx(result);
 
@@ -155,7 +162,8 @@ void build_batched_contours(
 {
     // Pack all CPU-traced contours into one structure-of-arrays-like layout:
     // points holds every contour back-to-back, while offsets/lengths describe
-    // each piece slice. CUDA kernels can then process all pieces in one launch.
+    // each piece slice. CUDA kernels can then process all pieces in one launch
+    // and avoid per-piece allocations or vector-of-vectors device structures.
     batch.points.clear();
     batch.offsets.clear();
     batch.lengths.clear();
@@ -222,6 +230,7 @@ __global__ void batched_moving_average_kernel(
     float sum_b = 0.0f;
     for (int window_j = -half_window; window_j <= half_window; ++window_j)
     {
+        // The contour is closed, so smoothing wraps around the slice boundary.
         int local_j = (local_i + window_j) % n;
         if (local_j < 0)
         {
@@ -246,6 +255,7 @@ void smooth_contours_batched_cuda(
 {
     // Moore tracing creates host contours. Upload all of them once, then run a
     // single batched kernel instead of launching one smoothing kernel per piece.
+    // The smoothed contours stay on the device for the circle and radial stages.
     scratch.points.resize(batch.points.size());
     scratch.smoothed.resize(batch.points.size());
     scratch.offsets.resize(batch.offsets.size());
@@ -299,6 +309,8 @@ __global__ void batched_enclosing_circle_kernel(
     int max_y = INT_MIN;
     for (int i = tid; i < n; i += blockDim.x)
     {
+        // Threads scan strided points from one contour, then reduce local
+        // min/max values in shared memory. This avoids global atomics.
         const Coordinate<int> point = points[offset + i];
         if (point.a < min_x)
         {
@@ -356,6 +368,8 @@ __global__ void batched_enclosing_circle_kernel(
         }
         else
         {
+            // The serial approximation uses the center of the contour bounding
+            // box, not a true minimum enclosing circle.
             const float center_x = (static_cast<float>(s_min_x[0]) + static_cast<float>(s_max_x[0])) * 0.5f;
             const float center_y = (static_cast<float>(s_min_y[0]) + static_cast<float>(s_max_y[0])) * 0.5f;
             centers[piece_idx] = Coordinate<float>{center_x, center_y};
@@ -379,7 +393,7 @@ void enclosing_circle_centers_batched_cuda(
     }
 
     // One block reduces one piece contour. The pipeline only needs the center,
-    // so there is no radius reduction in the batched path.
+    // so there is no radius reduction or host-side center copy in this path.
     const int block = 256;
     batched_enclosing_circle_kernel<<<static_cast<unsigned int>(piece_count), block>>>(
         thrust::raw_pointer_cast(scratch.smoothed.data()),
@@ -415,6 +429,8 @@ __global__ void batched_radial_signal_kernel(
     const int global_i = offsets[piece_idx] + local_i;
     const Coordinate<int> point = points[global_i];
     const Coordinate<float> center = centers[piece_idx];
+    // Radial distance is the only value needed by smoothing, peak detection,
+    // and edge classification.
     const float dx = static_cast<float>(point.a) - center.a;
     const float dy = static_cast<float>(point.b) - center.b;
     signals[global_i] = sqrtf(dx * dx + dy * dy);
@@ -446,5 +462,7 @@ void radial_signals_batched_cuda(
         batch.max_length);
     CUDA_CHECK(cudaGetLastError());
 
+    // Edge classification currently runs on CPU. Keep this copy explicit in
+    // the radial stage so its cost stays visible in profiling.
     thrust::copy(scratch.signals.begin(), scratch.signals.end(), signals.begin());
 }

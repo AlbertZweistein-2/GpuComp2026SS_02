@@ -1,47 +1,37 @@
-/**
- * CUDA C++ — Step 1: Image Preprocessing
- * TU Wien — GPU Architecture & Computing SS2026
- *
- * GPU preprocessing implementation:
- *   1. RGB -> Grayscale      (ITU-R BT.601)
- *   2. Normalization         (Min/Max -> [0, 255])
- *   3. Gaussian Blur         (2-D convolution with separable kernel)
- *   4. Histogram + Otsu      (automatic threshold computation)
- *   5. Binarization
- */
-
+// ----------------------------------------------------------------------
+// HEADER INCLUDES
+#include "parallel/cleaning.cuh"
+#include "parallel/preprocessing.cuh"
+#include "helpers.hpp"
+// ----------------------------------------------------------------------
+// STANDARD LIBRARY INCLUDES
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
-
+// ----------------------------------------------------------------------
+// GPU SPECIFIC INCLUDES
 #include <cuda_runtime.h>
-
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/extrema.h>
+// ----------------------------------------------------------------------
 
-#include "parallel/cleaning.cuh"
-#include "parallel/preprocessing.cuh"
-
-#include "helpers.hpp"
-
-// ─── Constants (same as the CUDA implementation) ─────────────────────────────
+// ----------------------------------------------------------------------
+// PREPROCESSING CONSTANTS
 static constexpr int MAX_KERNEL = 15;
 static constexpr int HIST_BINS = 256;
 
-// Gaussian kernel will be allocated in global memory
-// CHANGE: was returned to const due to performance reasons
-
+// Gaussian weights live in constant memory because every thread reads the same
+// small kernel during blur.
 __constant__ float d_gaussian_kernel[MAX_KERNEL * MAX_KERNEL];
+// ----------------------------------------------------------------------
 
-// FOR CUDA Impl.
-//  -----------------------------------------------------------------------------
-// STEP 1 — RGB -> Grayscale
-//
-//  Formula: Y = 0.299·R + 0.587·G + 0.114·B  (ITU-R BT.601)
-//  -----------------------------------------------------------------------------
-
+// ----------------------------------------------------------------------
+// STEP 1: RGB -> grayscale
+// Convert RGB pixels to luminance using ITU-R BT.601 coefficients.
+// The grid-stride loop lets a fixed launch geometry cover large images without
+// requiring one resident thread per pixel.
 __global__ void rgb_to_grayscale_kernel(
     const uint8_t *rgb,
     float *gray,
@@ -63,13 +53,14 @@ __global__ void rgb_to_grayscale_kernel(
         gray[idx] = 0.299f * r + 0.587f * g + 0.114f * b;
     }
 }
+// ----------------------------------------------------------------------
 
-// FOR CUDA Impl.
-//  -----------------------------------------------------------------------------
-//  STEP 2 — Normalization
-//
-//  Scales all pixel values linearly to [0, 255].
-//  -----------------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// STEP 2: Normalization
+// Copy the min/max values found by Thrust into a compact device buffer so the
+// normalization kernel can read them without host synchronization.
+// The min/max reduction itself is delegated to Thrust below, avoiding a custom
+// reduction kernel and keeping the full normalization path on the device.
 __global__ void copy_minmax_kernel(
     const float *min_ptr,
     const float *max_ptr,
@@ -82,6 +73,7 @@ __global__ void copy_minmax_kernel(
     }
 }
 
+// Scale all grayscale pixel values linearly to [0, 255].
 __global__ void normalize_kernel(
     float *gray,
     const float *minmax,
@@ -102,11 +94,11 @@ __global__ void normalize_kernel(
         gray[idx] = (gray[idx] - gmin) / range * 255.0f;
     }
 }
+// ----------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
-// STEP 3a — Create Gaussian kernel
-//
-// Produce a normalized (ksize × ksize) Gaussian kernel.
+// STEP 3a: Create Gaussian kernel
+// Produce a normalized ksize x ksize Gaussian kernel on the host.
 // -----------------------------------------------------------------------------
 static std::vector<float> make_gaussian_kernel(int ksize, float sigma)
 {
@@ -131,12 +123,12 @@ static std::vector<float> make_gaussian_kernel(int ksize, float sigma)
     return kernel;
 }
 
-// FOR CUDA Impl.
-//  -----------------------------------------------------------------------------
-//  STEP 3b — Gaussian Blur (2-D convolution)
-//
-//  -----------------------------------------------------------------------------
-
+// ----------------------------------------------------------------------
+// STEP 3b: Gaussian blur
+// Apply the Gaussian kernel from constant memory. Border pixels clamp to the
+// nearest valid image coordinate.
+// Constant memory is a good fit here because all threads repeatedly read the
+// same small coefficient table, reducing redundant global-memory traffic.
 __global__ void gaussian_blur_kernel(
     const float *in,
     float *out,
@@ -177,10 +169,14 @@ __global__ void gaussian_blur_kernel(
         out[idx] = sum;
     }
 }
+// ----------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
-// FOR CUDA Impl.
-// STEP 4a — Compute histogram
+// STEP 4a: Compute histogram
+// Build a 256-bin image histogram using one shared-memory histogram per block,
+// then atomically merge each block histogram into the global histogram.
+// This reduces global atomic contention: most pixel updates hit fast per-block
+// shared memory, and only 256 bins per block are merged globally.
 // -----------------------------------------------------------------------------
 __global__ void histogram_kernel(
     const float *gray,
@@ -215,8 +211,11 @@ __global__ void histogram_kernel(
 }
 
 // -----------------------------------------------------------------------------
-// FOR CUDA Impl.
-// STEP 4b — Otsu threshold
+// STEP 4b: Otsu threshold
+// Compute the threshold that maximizes between-class variance. This work is
+// small enough that a single device thread avoids an extra device-to-host copy.
+// Keeping this on the GPU also keeps the threshold value device-resident for the
+// fused binarize/erode cleaning kernel.
 // -----------------------------------------------------------------------------
 __global__ void otsu_threshold_kernel(
     const uint32_t *hist,
@@ -263,9 +262,10 @@ __global__ void otsu_threshold_kernel(
 }
 
 // -----------------------------------------------------------------------------
-// Preprocessing stages only. Cleaning is in parallel/cleaning.cuh.
+// CUDA SCRATCH ALLOCATION
+// Allocate reusable device buffers for all preprocessing stages. The pipeline
+// calls this once during CUDA setup and reuses the buffers in preprocess_cuda.
 // -----------------------------------------------------------------------------
-
 void allocate_preprocess_cuda_scratch(
     int width,
     int height,
@@ -281,6 +281,11 @@ void allocate_preprocess_cuda_scratch(
     scratch.minmax.resize(2);
 }
 
+// -----------------------------------------------------------------------------
+// MAIN PREPROCESSING FUNCTION
+// Run the full preprocessing path on already-allocated device buffers:
+// RGB -> grayscale -> normalize -> blur -> histogram/Otsu -> morphological open.
+// -----------------------------------------------------------------------------
 void preprocess_cuda(
     const uint8_t *d_rgb_ptr,
     uint8_t *d_cleaned_ptr,
@@ -292,8 +297,10 @@ void preprocess_cuda(
 {
     const int num_pixels = width * height;
 
+    // Create and upload the Gaussian kernel for this preprocessing run.
     std::vector<float> kernel = make_gaussian_kernel(ksize, sigma);
 
+    // Resolve raw device pointers from the preallocated scratch vectors.
     uint8_t *d_temp = thrust::raw_pointer_cast(scratch.temp.data());
     float *d_gray = thrust::raw_pointer_cast(scratch.gray.data());
     float *d_blurred = thrust::raw_pointer_cast(scratch.blurred.data());
@@ -306,9 +313,11 @@ void preprocess_cuda(
         kernel.data(),
         kernel.size() * sizeof(float)));
 
+    // Most kernels use a 1D grid over all image pixels.
     int block1d = 256;
     int grid1d = (num_pixels + block1d - 1) / block1d;
 
+    // STEP 1: RGB -> grayscale.
     rgb_to_grayscale_kernel<<<grid1d, block1d>>>(
         d_rgb_ptr,
         d_gray,
@@ -319,23 +328,27 @@ void preprocess_cuda(
     thrust::device_ptr<float> gray_begin(d_gray);
     thrust::device_ptr<float> gray_end(d_gray + num_pixels);
 
+    // STEP 2a: Find min/max grayscale values with Thrust's device reduction.
     auto minmax_pair = thrust::minmax_element(
         thrust::device,
         gray_begin,
         gray_end);
 
+    // STEP 2b: Store min/max values on device for normalization.
     copy_minmax_kernel<<<1, 1>>>(
         thrust::raw_pointer_cast(minmax_pair.first),
         thrust::raw_pointer_cast(minmax_pair.second),
         d_minmax);
     CUDA_CHECK(cudaGetLastError());
 
+    // STEP 2c: Normalize grayscale values to [0, 255].
     normalize_kernel<<<grid1d, block1d>>>(
         d_gray,
         d_minmax,
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
+    // STEP 3: Gaussian blur.
     gaussian_blur_kernel<<<grid1d, block1d>>>(
         d_gray,
         d_blurred,
@@ -346,6 +359,8 @@ void preprocess_cuda(
 
     CUDA_CHECK(cudaMemset(d_hist, 0, HIST_BINS * sizeof(uint32_t)));
 
+    // STEP 4a: Histogram. Cap the grid because more blocks only increase
+    // global merge atomics after a point.
     int hist_grid = std::min(grid1d, 1024);
 
     histogram_kernel<<<hist_grid, block1d>>>(
@@ -354,12 +369,14 @@ void preprocess_cuda(
         num_pixels);
     CUDA_CHECK(cudaGetLastError());
 
+    // STEP 4b: Otsu threshold selection.
     otsu_threshold_kernel<<<1, 1>>>(
         d_hist,
         num_pixels,
         d_threshold);
     CUDA_CHECK(cudaGetLastError());
 
+    // STEP 5: Binarize and clean using morphological opening.
     binarize_morphological_open_cuda_device(
         d_blurred,
         d_threshold,

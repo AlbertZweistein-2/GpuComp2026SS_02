@@ -58,7 +58,8 @@ namespace fs = std::filesystem;
 
 namespace
 {
-    // TODO: Experiment with constants to avoid misclassification if time
+    // Algorithm parameters shared across the CUDA pipeline. Most of these
+    // mirror the serial pipeline so performance changes are easier to compare.
     constexpr int GAUSSIAN_KERNEL_SIZE = 3; // KSize must be odd and >= 3!
     constexpr float GAUSSIAN_SIGMA = 1.0f;
     constexpr int MIN_REGION_AREA = 2000;
@@ -70,8 +71,10 @@ namespace
     constexpr float EDGE_TOL_FACTOR = 0.1f;
     constexpr double REFERENCE_IMAGE_HEIGHT = 5100.0;
 
-    int scaled_min_region_area(int height)
     // Scale the minimum region area based on the input image height relative to a reference height.
+    // Area scales quadratically with image height so filtering behaves similarly
+    // on downscaled or upscaled inputs.
+    int scaled_min_region_area(int height)
     {
         const double scale = static_cast<double>(height) / REFERENCE_IMAGE_HEIGHT;
         return std::max(1, static_cast<int>(MIN_REGION_AREA * scale * scale + 0.5));
@@ -95,6 +98,8 @@ namespace
     // Get absolute path of a file or directory
     fs::path project_path(const std::string &path)
     {
+        // Keep CLI defaults relative to the current project directory while
+        // still accepting absolute paths from scripts.
         fs::path p(path);
         return p.is_absolute() ? p : fs::current_path() / p;
     }
@@ -106,11 +111,14 @@ namespace
     void time_stage(const char *label, double &seconds, Fn &&fn)
     {
 #if ENABLE_NVTX >= 1
+        // NVTX ranges make the same stage names visible in Nsight Systems.
         NvtxRange range(label);
 #else
         (void)label;
 #endif
 #if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
+        // Stage timing is compiled out unless requested, avoiding timer noise
+        // in the default build.
         Timer timer;
         timer.reset();
         fn();
@@ -133,7 +141,9 @@ namespace
 #endif
     // ---
 
-    // Allocation function to allocate all 
+    // Allocate device buffers whose sizes are only known after contour tracing.
+    // Calling resize here centralizes allocation cost under the CUDA setup
+    // bucket instead of charging it to later compute stages.
     void allocate_batched_cuda_scratch(
         const BatchedContours &batch,
         BatchedContourCudaScratch &contour_scratch,
@@ -157,6 +167,7 @@ namespace
     uint8_t *load_rgb_image(const fs::path &path, int &width, int &height)
     {
         int channels = 0;
+        // Force RGB output so all downstream kernels can assume three channels.
         uint8_t *data = stbi_load(path.string().c_str(), &width, &height, &channels, 3);
         if (data == nullptr)
         {
@@ -203,6 +214,7 @@ namespace
         }
 
         std::sort(images.begin(), images.end());
+        // Deterministic order keeps benchmark CSV runs reproducible.
         return images;
     }
     
@@ -236,6 +248,8 @@ namespace
         const std::string configured_path = env_or_empty("PIPELINE_TIMINGS_CSV");
         if (!configured_path.empty())
         {
+            // Allows benchmark scripts to collect timings outside the normal
+            // output directory.
             return project_path(configured_path);
         }
         return project_path(options.output_dir) / "cuda_timings.csv";
@@ -276,6 +290,8 @@ namespace
         const std::string pieces = csv_value_or_fallback(
             env_or_empty("PIPELINE_TIMING_PIECES"),
             std::to_string(result.pieces.size()));
+        // `run` and `pieces` can be supplied by benchmark scripts so repeated
+        // runs can be grouped without changing pipeline code.
         const std::string run = csv_value_or_fallback(env_or_empty("PIPELINE_TIMING_RUN"), "1");
 
         csv << image_resolution(width, height) << ','
@@ -349,6 +365,8 @@ namespace
         std::cout << "\n-- Timings -------------------------------\n";
         print_timing("Total wall time", results.timings.total_seconds);
 #if SUB_TIMINGS >= 1 || PERSIST_TIMINGS >= 1
+        // Sort by stage cost so the slowest pipeline parts are immediately
+        // visible in normal console output.
         std::vector<std::pair<std::string_view, double>> stage_timings = {
             {"CUDA setup", results.timings.cuda_setup},
             {"Preprocessing", results.timings.preprocessing},
@@ -380,6 +398,8 @@ namespace
         {
             accounted_seconds += seconds;
         }
+        // This includes host work inside the pipeline timer that is not wrapped
+        // in an explicit stage, such as plan construction and batch packing.
         print_timing("Untracked overhead", results.timings.total_seconds - accounted_seconds);
 #else
         std::cout << "  Sub timings disabled; compile with SUB_TIMINGS >= 1 to measure stages.\n";
@@ -405,6 +425,9 @@ PipelineResult run_cuda(const PipelineOptions &options)
     std::unique_ptr<uint8_t, decltype(&stbi_image_free)> rgb(nullptr, stbi_image_free);
     rgb.reset(load_rgb_image(input_image_path, width, height));
 
+    // Start wall-clock timing after image decode. The final overlay file write
+    // also happens after this timer is captured, so pipeline timings focus on
+    // processing and overlay rendering rather than I/O.
     Timer total_timer;
     total_timer.reset();
 
@@ -415,6 +438,7 @@ PipelineResult run_cuda(const PipelineOptions &options)
 
     // Host-side pipeline state. Sizes that depend on detection results are
     // filled as the pipeline discovers regions and contours.
+    // Raw/smoothed radial signals stay flat and use batched_contours offsets.
     std::vector<Region> regions;
     std::vector<PieceBoundaryMask> piece_boundaries;
     std::vector<uint8_t> piece_boundary_data;
@@ -430,6 +454,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     thrust::device_vector<uint8_t> d_rgb;
     thrust::device_vector<uint8_t> d_cleaned;
     thrust::device_vector<int> d_compact_labels;
+    // Raw pointers are captured after resize because kernels take plain CUDA
+    // pointers, while device_vector owns the allocation lifetime.
     uint8_t *d_rgb_ptr = nullptr;
     uint8_t *d_cleaned_ptr = nullptr;
     int *d_compact_labels_ptr = nullptr;
@@ -446,6 +472,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] allocating CUDA buffers and uploading image");
     time_stage("CUDA setup", result.timings.cuda_setup, [&]()
                {
+        // These buffers are image-sized and can be allocated before any
+        // content-dependent piece count is known.
         d_rgb.resize(rgb_value_count);
         d_cleaned.resize(pixel_count);
         d_compact_labels.resize(pixel_count);
@@ -455,6 +483,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
             height,
             component_scratch,
             region_build_scratch);
+        // Pageable host upload remains intentional; earlier pinned-memory tests
+        // did not improve this single-image path.
         thrust::copy(rgb.get(), rgb.get() + rgb_value_count, d_rgb.begin());
 
         d_rgb_ptr = thrust::raw_pointer_cast(d_rgb.data());
@@ -477,6 +507,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] connected components");
     time_stage("Connected components", result.timings.connected_components, [&]()
                {
+        // CCL produces dense labels on device; region construction filters
+        // small components and copies back only Region metadata.
         connected_components_buf_cuda_device(
             d_cleaned_ptr,
             d_compact_labels_ptr,
@@ -494,6 +526,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
 
     result.pieces.resize(regions.size());
 
+    // Boundary extraction needs compact per-piece windows. The plan is built on
+    // host from Region metadata before allocating the matching device buffers.
     BoundaryExtractionPlan boundary_plan = build_boundary_extraction_plan(
         regions,
         width,
@@ -510,6 +544,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] extracting piece boundaries");
     time_stage("Boundary extraction", result.timings.boundary_extraction, [&]()
                {
+        // The output is copied back as packed per-piece masks because Moore
+        // contour tracing is still CPU-side.
         extract_piece_boundary_masks_from_labels_cuda(
             d_compact_labels_ptr,
             boundary_plan,
@@ -525,6 +561,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
                {
         const std::ptrdiff_t region_count = static_cast<std::ptrdiff_t>(regions.size());
 #ifdef _OPENMP
+// Each region owns a separate output slot and boundary mask, so CPU contour
+// tracing can run independently per piece.
 #pragma omp parallel for schedule(dynamic)
 #endif
         for (std::ptrdiff_t region_idx = 0; region_idx < region_count; ++region_idx)
@@ -547,6 +585,9 @@ PipelineResult run_cuda(const PipelineOptions &options)
                 piece.contour);
             for (Coordinate<int> &point : piece.contour)
             {
+                // Boundary masks are local to their cropped region. Shift the
+                // contour back into full-image coordinates for visualization
+                // and later geometric analysis.
                 point.a += piece_boundary.image_offset.a;
                 point.b += piece_boundary.image_offset.b;
             }
@@ -561,6 +602,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] allocating batched contour/signal CUDA buffers");
     time_stage("CUDA setup", result.timings.cuda_setup, [&]()
                {
+        // This is a second setup range because contour counts and lengths are
+        // only known after CPU Moore tracing.
         allocate_batched_cuda_scratch(
             batched_contours,
             batched_contour_scratch,
@@ -588,6 +631,7 @@ PipelineResult run_cuda(const PipelineOptions &options)
                { radial_signals_batched_cuda(
                      batched_contours,
                      batched_contour_scratch,
+                     // Host copy is needed by CPU edge classification.
                      flat_raw_radial_signal); });
 
     // STEP 9: Smooth all radial signals in one batched GPU launch.
@@ -606,6 +650,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] detecting peaks");
     time_stage("Peak detection", result.timings.peak_detection, [&]()
                { find_triangular_peaks_batched_cuda(
+                     // Host smoothed signal is used for CPU prominence scoring;
+                     // device smoothed signal is used for the maxima mask.
                      flat_smoothed_radial_signal,
                      signal_scratch.smoothed,
                      batched_contours.offsets,
@@ -623,6 +669,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] classifying edges");
     time_stage("Edge classification", result.timings.edge_classification, [&]()
                {
+        // Kept on CPU: profiling showed the isolated GPU classifier's launch
+        // and tiny copy overhead outweighed the saved raw-signal copy.
         classify_edges_batched_cuda(
             flat_raw_radial_signal,
             batched_contours.offsets,
@@ -633,6 +681,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
 
         for (std::size_t piece_idx = 0; piece_idx < result.pieces.size(); ++piece_idx)
         {
+            // Attach batched signal-analysis results back to the user-facing
+            // per-piece structs.
             PuzzlePiece &piece = result.pieces[piece_idx];
             piece.corner_indices = batched_corner_indices[piece_idx];
             piece.edge_labels = batched_edge_labels[piece_idx];
@@ -643,6 +693,8 @@ PipelineResult run_cuda(const PipelineOptions &options)
     // STEP 12: Draw final contour and bounding-box overlay image
     time_stage("Visualization", result.timings.visualization, [&]()
                {
+        // Rendering mutates the loaded RGB buffer in-place and avoids another
+        // full image copy before writing the overlay.
         parallel_visualization::render_piece_overlays(
             rgb.get(),
             width,
@@ -703,8 +755,9 @@ int main(int argc, char **argv)
 
             debug_print("Running CUDA pipeline on " + std::to_string(images.size()) +
                         " image(s) in: " + input_path.string());
-            // Call pipeline for all images
-            // Gives benefits of single CUDA Launch overhead
+            // Run each image through the same one-image pipeline. The first
+            // image pays CUDA context/module setup; later images usually see
+            // warmer CUDA runtime state.
             for (const fs::path &image_path : images)
             {
                 PipelineOptions image_options = options;

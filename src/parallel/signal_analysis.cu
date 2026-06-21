@@ -40,6 +40,7 @@ namespace
 
         const int offset = offsets[piece_idx];
         const int global_i = offset + local_i;
+        // Radial signals are circular: first and last samples are neighbors.
         const int local_l = (local_i == 0) ? n - 1 : local_i - 1;
         const int local_r = (local_i == n - 1) ? 0 : local_i + 1;
         const float val = src[global_i];
@@ -81,6 +82,8 @@ namespace
         float sum = 0.0f;
         for (int j = -pad; j <= pad; ++j)
         {
+            // Use circular indexing so the smoothing window crosses the
+            // contour seam without shrinking near the first or last sample.
             int local_j = (local_i + j) % n;
             if (local_j < 0)
             {
@@ -118,6 +121,8 @@ namespace
         {
             return smooth[signal_offset + static_cast<std::size_t>(local_i)];
         };
+        // Normalize any negative or overflowing local index back into this
+        // closed signal slice.
         auto wrap = [n](int i)
         { return ((i % n) + n) % n; };
 
@@ -126,10 +131,15 @@ namespace
         {
             const float val = value_at(idx);
 
+            // Prominence is measured by walking left and right until the signal
+            // rises above this candidate. This branchy variable-length scan is
+            // why peak scoring remains CPU-side for now.
             float lmin = val;
             float rmin = val;
             for (int step = 1; step < n; ++step)
             {
+                // Walk downhill/flat until another higher sample bounds the
+                // candidate's basin on the left side.
                 const int j = wrap(idx - step);
                 if (value_at(j) > val)
                 {
@@ -139,6 +149,8 @@ namespace
             }
             for (int step = 1; step < n; ++step)
             {
+                // Same basin search on the right side. The weaker side limits
+                // the usable prominence.
                 const int j = wrap(idx + step);
                 if (value_at(j) > val)
                 {
@@ -153,6 +165,7 @@ namespace
                 continue;
             }
 
+            // Sharp corners should stand above their local shoulder samples.
             const int li = wrap(idx - 20);
             const int ri = wrap(idx + 20);
             const float sharpness = val - 0.5f * (value_at(li) + value_at(ri));
@@ -166,6 +179,8 @@ namespace
                 const int linear_dist = std::abs(idx - kept.back().idx);
                 const int circ_dist = std::min(linear_dist, n - linear_dist);
 
+                // Suppress clusters of nearby local maxima, keeping only the
+                // highest sample inside each minimum-distance neighborhood.
                 if (circ_dist < min_distance)
                 {
                     if (val > kept.back().val)
@@ -181,6 +196,8 @@ namespace
 
         if (kept.size() > 1)
         {
+            // Because the signal is circular, the first and last kept peaks may
+            // still be neighbors even though they are far apart linearly.
             const int linear_dist = std::abs(kept.front().idx - kept.back().idx);
             const int circ_dist = std::min(linear_dist, n - linear_dist);
             if (circ_dist < min_distance)
@@ -194,6 +211,7 @@ namespace
         }
 
         std::vector<Candidate> remaining = kept;
+        // Sort by height so the first chosen corner is the strongest peak.
         std::sort(remaining.begin(), remaining.end(),
                   [](const Candidate &a, const Candidate &b)
                   {
@@ -203,6 +221,8 @@ namespace
         std::vector<int> corners;
         if (!remaining.empty())
         {
+            // Seed with the strongest candidate, then greedily add distant
+            // peaks to approximate four puzzle corners around the closed curve.
             corners.push_back(remaining.front().idx);
         }
 
@@ -216,6 +236,8 @@ namespace
                 int min_d = n;
                 for (int corner : corners)
                 {
+                    // Distance on the closed contour is the shorter of the
+                    // forward and wraparound arcs.
                     const int d = std::abs(peak.idx - corner);
                     min_d = std::min(min_d, std::min(d, n - d));
                 }
@@ -229,6 +251,8 @@ namespace
             if (best_idx != -1)
             {
                 corners.push_back(best_idx);
+                // Remove the selected peak so it cannot be chosen again on the
+                // next greedy iteration.
                 remaining.erase(
                     std::remove_if(
                         remaining.begin(),
@@ -241,6 +265,8 @@ namespace
             }
         }
 
+        // Downstream edge traversal expects corners in contour order, not in
+        // peak-strength selection order.
         std::sort(corners.begin(), corners.end());
         for (int i = 0; i < std::min(4, static_cast<int>(corners.size())); ++i)
         {
@@ -274,6 +300,7 @@ void smooth_signals_batched_cuda(
 
     // Smooth each piece inside its own circular signal slice. This replaces
     // one launch and one DtoH copy per piece with one batched launch/copy.
+    // The smoothed signal remains device-resident for the maxima mask kernel.
     const int block = 256;
     const dim3 grid(
         static_cast<unsigned int>((max_length + block - 1) / block),
@@ -288,6 +315,8 @@ void smooth_signals_batched_cuda(
         k / 2);
     CUDA_CHECK(cudaGetLastError());
 
+    // Peak scoring still runs on CPU, so keep one flat host copy of the
+    // smoothed signal instead of copying per piece.
     thrust::copy(scratch.smoothed.begin(), scratch.smoothed.end(), smoothed.begin());
 }
 
@@ -330,6 +359,8 @@ void find_triangular_peaks_batched_cuda(
         max_length);
     CUDA_CHECK(cudaGetLastError());
 
+    // Copy the compact int mask once. The following CPU pass only walks samples
+    // that survived the cheap local-maxima test.
     std::vector<int> host_mask(smooth.size());
     thrust::copy(scratch.peak_mask.begin(), scratch.peak_mask.end(), host_mask.begin());
 
@@ -345,6 +376,8 @@ void find_triangular_peaks_batched_cuda(
 
         candidates.clear();
         candidates.reserve(static_cast<std::size_t>(n / 4));
+        // Convert the flat mask slice into local candidate indices so the
+        // original serial peak-selection logic can operate unchanged.
         for (int local_i = 0; local_i < n; ++local_i)
         {
             if (host_mask[static_cast<std::size_t>(offset + local_i)] != 0)
@@ -391,6 +424,7 @@ void classify_edges_batched_cuda(
 
         auto value_at = [&](int local_i)
         {
+            // local_i is already wrapped by the caller before reaching here.
             return raw[static_cast<std::size_t>(offset + local_i)];
         };
 
@@ -400,6 +434,11 @@ void classify_edges_batched_cuda(
             const int ca = piece_corners[static_cast<std::size_t>(edge_idx)];
             const int cb = piece_corners[static_cast<std::size_t>((edge_idx + 1) % 4)];
 
+            // Classify only the middle of the edge and ignore a 20% margin near
+            // both corners, where the radial signal is dominated by the corner
+            // shape rather than the edge connector.
+            // The modulo handles the fourth edge, which wraps from corner 3
+            // back to corner 0.
             const int edge_len = (cb - ca + n) % n;
             const int margin = edge_len / 5;
 
@@ -411,6 +450,8 @@ void classify_edges_batched_cuda(
             const float shoulder_max = std::max(v_start, v_end);
             const float shoulder_min = std::min(v_start, v_end);
 
+            // A bump above both shoulders is a knob; a dip below both shoulders
+            // is a hole. Otherwise the edge is straight.
             float mx = -1e30f;
             float mn = 1e30f;
             for (int step = margin; step <= edge_len - margin; ++step)
@@ -422,6 +463,8 @@ void classify_edges_batched_cuda(
             }
 
             const float local_tol = tol_factor * shoulder_max;
+            // The tolerance scales with edge size, making the classification
+            // less sensitive to absolute piece scale.
             if (mx > shoulder_max + local_tol)
             {
                 labels[piece_idx][static_cast<std::size_t>(edge_idx)] = EdgeType::Knob;
@@ -455,6 +498,8 @@ static char edge_char_cuda(EdgeType e)
 std::string edges_to_string_cuda(const EdgeLabels &labels)
 {
     std::string s;
+    // Convert enum labels back to the compact four-character string used by the
+    // lookup table and debug output.
     for (auto e : labels)
         s += edge_char_cuda(e);
     return s;
@@ -473,6 +518,7 @@ int PuzzleLookupTable::charToDigit(char c) const
 
 int PuzzleLookupTable::getBase3Index(const std::string &s) const
 {
+    // Treat L/V/C as base-3 digits so every four-edge string maps to [0, 80].
     return charToDigit(s[0]) * 27 +
            charToDigit(s[1]) * 9 +
            charToDigit(s[2]) * 3 +
@@ -486,6 +532,7 @@ std::string PuzzleLookupTable::rotate(const std::string &s) const
 
 std::string PuzzleLookupTable::getCategory(const std::string &s) const
 {
+    // The number of straight edges determines the broad puzzle-piece family.
     int l_count = std::count(s.begin(), s.end(), 'L');
     if (l_count == 0)
         return "I";
@@ -507,6 +554,8 @@ PuzzleLookupTable::PuzzleLookupTable()
     int count_I = 0, count_E = 0, count_C = 0, count_T = 0, count_S = 0;
     const char edges[] = {'L', 'V', 'C'};
 
+    // Precompute all 3^4 edge combinations. Rotations of the same edge string
+    // get the same class label, so later lookups are a single base-3 index.
     for (int i = 0; i < 3; ++i)
     {
         for (int j = 0; j < 3; ++j)
@@ -524,6 +573,8 @@ PuzzleLookupTable::PuzzleLookupTable()
                         std::string r2 = rotate(r1);
                         std::string r3 = rotate(r2);
 
+                        // Lexicographically smallest rotation is used as the
+                        // canonical representative for the class label.
                         std::string canonical = s;
                         if (r1 < canonical)
                             canonical = r1;
@@ -548,6 +599,8 @@ PuzzleLookupTable::PuzzleLookupTable()
 
                         std::string final_label = cat + "_" + std::to_string(class_id) + ": " + canonical;
 
+                        // Fill every rotation with the same label so runtime
+                        // classification does not need to normalize direction.
                         table[getBase3Index(s)] = final_label;
                         table[getBase3Index(r1)] = final_label;
                         table[getBase3Index(r2)] = final_label;

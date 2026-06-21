@@ -20,3 +20,5 @@ venv/
 *.exe
 test_runner
 build/
+
+*.log
