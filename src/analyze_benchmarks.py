@@ -4,11 +4,9 @@ import matplotlib.pyplot as plt
 import os
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SINGLE_CSV = os.path.join(BASE, "data/benchmark_results/serial_single.csv")
-FOLDER_CSV = os.path.join(BASE, "data/benchmark_results/serial_folder.csv")
 OUT_DIR = os.path.join(BASE, "data/benchmark_results")
 
-STAGES = [
+SERIAL_STAGES = [
     "preprocessing_ms",
     "connected_components_ms",
     "boundary_extraction_ms",
@@ -22,8 +20,23 @@ STAGES = [
     "visualization_ms",
 ]
 
-STAGE_LABELS = [s.replace("_ms", "") for s in STAGES]
+CUDA_STAGES = [
+    "preprocessing_ms",
+    "cuda_setup_ms",
+    "connected_components_ms",
+    "boundary_extraction_ms",
+    "contour_extraction_ms",
+    "contour_smoothing_ms",
+    "enclosing_circle_ms",
+    "radial_signal_ms",
+    "signal_smoothing_ms",
+    "peak_detection_ms",
+    "edge_classification_ms",
+    "visualization_ms",
+]
+
 BASELINE_RES = "5100x7016"
+REPEAT_IMAGE = "65_7_p1.jpg"
 
 
 def parse_pixels(res):
@@ -31,62 +44,44 @@ def parse_pixels(res):
     return int(w) * int(h)
 
 
-df_single = pd.read_csv(SINGLE_CSV)
-df_single["pixels"] = df_single["resolution"].apply(parse_pixels)
+def load_data(single_csv, folder_csv, stages):
+    df_single = pd.read_csv(single_csv)
+    df_single["pixels"] = df_single["resolution"].apply(parse_pixels)
+    df_folder = pd.read_csv(folder_csv)
+    df_folder["pixels"] = df_folder["resolution"].apply(parse_pixels)
 
-df_folder = pd.read_csv(FOLDER_CSV)
-df_folder["pixels"] = df_folder["resolution"].apply(parse_pixels)
-
-per_image = (
-    df_single.groupby(["pixels", "resolution", "image", "pieces"])[
-        ["total_ms"] + STAGES
-    ]
-    .mean()
-    .reset_index()
-)
-
-baseline = per_image[per_image["resolution"] == BASELINE_RES].copy()
-
-per_res = (
-    per_image.groupby(["pixels", "resolution"])[["total_ms"] + STAGES]
-    .mean()
-    .reset_index()
-    .sort_values("pixels")
-)
-
-baseline_folder = (
-    df_folder[df_folder["resolution"] == BASELINE_RES]
-    .groupby("image")[["total_ms"] + STAGES]
-    .mean()
-    .reset_index()
-)
-
-colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-stage_color = {stage: colors[i % len(colors)] for i, stage in enumerate(STAGES)}
-
-
-def plot_stage_bars(ax):
-    means = baseline[STAGES].mean()
-    stds = baseline[STAGES].std()
-    y = np.arange(len(STAGES))
-    ax.barh(
-        y,
-        means[STAGES],
-        xerr=stds[STAGES],
-        color=[stage_color[s] for s in STAGES],
-        capsize=4,
-        alpha=0.8,
+    per_image = (
+        df_single.groupby(["pixels", "resolution", "image", "pieces"])[
+            ["total_ms"] + stages
+        ]
+        .mean()
+        .reset_index()
     )
-    ax.set_yticks(y)
-    ax.set_yticklabels(STAGE_LABELS)
-    ax.set_xlabel("Runtime (ms)")
-    ax.invert_yaxis()
+    baseline = per_image[per_image["resolution"] == BASELINE_RES].copy()
+    per_res = (
+        per_image.groupby(["pixels", "resolution"])[["total_ms"] + stages]
+        .mean()
+        .reset_index()
+        .sort_values("pixels")
+    )
+    baseline_folder = (
+        df_folder[df_folder["resolution"] == BASELINE_RES]
+        .groupby("image")[["total_ms"] + stages]
+        .mean()
+        .reset_index()
+    )
+    return df_single, baseline, per_res, baseline_folder
 
 
-def plot_stages_vs_res(ax):
+def make_colors(stages):
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    return {s: colors[i % len(colors)] for i, s in enumerate(stages)}
+
+
+def plot_stages_vs_res(ax, per_res, stages, stage_color):
     x = per_res["pixels"].values
     cumsum = np.zeros(len(x))
-    for stage in STAGES:
+    for stage in stages:
         y = per_res[stage].values
         new_cumsum = cumsum + y
         ax.fill_between(
@@ -107,11 +102,11 @@ def plot_stages_vs_res(ax):
     ax.legend(fontsize=7, ncols=2)
 
 
-def plot_stages_vs_pieces(ax):
+def plot_stages_vs_pieces(ax, baseline, stages, stage_color):
     sub = baseline.sort_values("pieces")
     x = sub["pieces"].values
     cumsum = np.zeros(len(x))
-    for stage in STAGES:
+    for stage in stages:
         y = sub[stage].values
         new_cumsum = cumsum + y
         ax.fill_between(
@@ -130,46 +125,46 @@ def plot_stages_vs_pieces(ax):
     ax.legend(fontsize=7, ncols=2)
 
 
-def plot_mode_comparison(ax):
-    means_single = baseline[STAGES].mean()
-    stds_single = baseline[STAGES].std()
-    means_folder = baseline_folder[STAGES].mean()
-    stds_folder = baseline_folder[STAGES].std()
-    y = np.arange(len(STAGES))
+def plot_mode_comparison(ax, baseline, baseline_folder, stages, stage_color):
+    means_single = baseline[stages].mean()
+    stds_single = baseline[stages].std()
+    means_folder = baseline_folder[stages].mean()
+    stds_folder = baseline_folder[stages].std()
+    y = np.arange(len(stages))
     bar_h = 0.35
     ax.barh(
         y - bar_h / 2,
-        means_single[STAGES],
+        means_single[stages],
         height=bar_h,
-        xerr=stds_single[STAGES],
-        color=[stage_color[s] for s in STAGES],
+        xerr=stds_single[stages],
+        color=[stage_color[s] for s in stages],
         alpha=0.8,
         capsize=3,
         label="single",
     )
     ax.barh(
         y + bar_h / 2,
-        means_folder[STAGES],
+        means_folder[stages],
         height=bar_h,
-        xerr=stds_folder[STAGES],
-        color=[stage_color[s] for s in STAGES],
+        xerr=stds_folder[stages],
+        color=[stage_color[s] for s in stages],
         alpha=0.4,
         capsize=3,
         label="folder",
     )
     ax.set_yticks(y)
-    ax.set_yticklabels(STAGE_LABELS)
+    ax.set_yticklabels([s.replace("_ms", "") for s in stages])
     ax.set_xlabel("Runtime (ms)")
     ax.invert_yaxis()
     ax.legend(fontsize=7)
 
 
-def plot_mode_comparison_stacked(ax):
-    means_single = baseline[STAGES].mean()
-    means_folder = baseline_folder[STAGES].mean()
+def plot_mode_comparison_stacked(ax, baseline, baseline_folder, stages, stage_color):
+    means_single = baseline[stages].mean()
+    means_folder = baseline_folder[stages].mean()
     x = ["single", "folder"]
     cumsum = np.zeros(2)
-    for stage in STAGES:
+    for stage in stages:
         vals = np.array([means_single[stage], means_folder[stage]])
         ax.bar(
             x,
@@ -184,16 +179,13 @@ def plot_mode_comparison_stacked(ax):
     ax.legend(fontsize=7, ncols=2)
 
 
-REPEAT_IMAGE = "65_7_p1.jpg"
-
-
-def plot_runs_stacked(ax):
+def plot_runs_stacked(ax, df_single, stages, stage_color):
     sub = df_single[
         (df_single["resolution"] == BASELINE_RES) & (df_single["image"] == REPEAT_IMAGE)
     ].sort_values("run")
     x = [f"run {r}" for r in sub["run"].values]
     cumsum = np.zeros(len(sub))
-    for stage in STAGES:
+    for stage in stages:
         vals = sub[stage].values
         ax.bar(
             x,
@@ -208,37 +200,68 @@ def plot_runs_stacked(ax):
     ax.legend(fontsize=7, ncols=2)
 
 
-plots = [
-    ("serial_stages_vs_res", plot_stages_vs_res),
-    ("serial_stages_vs_pieces", plot_stages_vs_pieces),
-    ("serial_mode_comparison", plot_mode_comparison),
-    ("serial_mode_comparison_stacked", plot_mode_comparison_stacked),
-    ("serial_runs_stacked", plot_runs_stacked),
-]
+def save_plots(prefix, df_single, baseline, per_res, baseline_folder, stages):
+    sc = make_colors(stages)
+    HBAR = {f"{prefix}_mode_comparison"}
+    VBAR = {f"{prefix}_mode_comparison_stacked", f"{prefix}_runs_stacked"}
+    plots = [
+        (
+            f"{prefix}_stages_vs_res",
+            lambda ax: plot_stages_vs_res(ax, per_res, stages, sc),
+        ),
+        (
+            f"{prefix}_stages_vs_pieces",
+            lambda ax: plot_stages_vs_pieces(ax, baseline, stages, sc),
+        ),
+        (
+            f"{prefix}_mode_comparison",
+            lambda ax: plot_mode_comparison(ax, baseline, baseline_folder, stages, sc),
+        ),
+        (
+            f"{prefix}_mode_comparison_stacked",
+            lambda ax: plot_mode_comparison_stacked(
+                ax, baseline, baseline_folder, stages, sc
+            ),
+        ),
+        (
+            f"{prefix}_runs_stacked",
+            lambda ax: plot_runs_stacked(ax, df_single, stages, sc),
+        ),
+    ]
+    sizes = [("_report", (6, 4)), ("_presentation", (10, 6))]
+    for name, plot_fn in plots:
+        for suffix, figsize in sizes:
+            fig, ax = plt.subplots(figsize=figsize)
+            plot_fn(ax)
+            if name in HBAR:
+                ax.set_xscale("log")
+                ax.grid(axis="x", linewidth=0.4, color="gray", alpha=0.4)
+            elif name in VBAR:
+                ax.set_ylim(bottom=0)
+                ax.yaxis.set_major_locator(plt.MultipleLocator(500))
+                ax.grid(axis="y", linewidth=0.4, color="gray", alpha=0.4)
+            else:
+                ax.set_ylim(bottom=0)
+                ax.yaxis.set_major_locator(plt.MultipleLocator(500))
+                ax.grid(axis="y", linewidth=0.4, color="gray", alpha=0.4)
+            ax.set_axisbelow(True)
+            plt.tight_layout()
+            plt.savefig(os.path.join(OUT_DIR, name + suffix + ".pdf"))
+            plt.close()
 
-sizes = [("_report", (6, 4)), ("_presentation", (10, 6))]
 
-HBAR_PLOTS = {"serial_mode_comparison"}
-VBAR_PLOTS = {"serial_mode_comparison_stacked", "serial_runs_stacked"}
+df_s, baseline_s, per_res_s, baseline_folder_s = load_data(
+    os.path.join(BASE, "data/benchmark_results/serial_single.csv"),
+    os.path.join(BASE, "data/benchmark_results/serial_folder.csv"),
+    SERIAL_STAGES,
+)
+save_plots("serial", df_s, baseline_s, per_res_s, baseline_folder_s, SERIAL_STAGES)
 
-for name, plot_fn in plots:
-    for suffix, figsize in sizes:
-        fig, ax = plt.subplots(figsize=figsize)
-        plot_fn(ax)
-        if name in HBAR_PLOTS:
-            ax.set_xscale("log")
-            ax.grid(axis="x", linewidth=0.4, color="gray", alpha=0.4)
-        elif name in VBAR_PLOTS:
-            ax.set_ylim(bottom=0)
-            ax.yaxis.set_major_locator(plt.MultipleLocator(500))
-            ax.grid(axis="y", linewidth=0.4, color="gray", alpha=0.4)
-        else:
-            ax.set_ylim(bottom=0)
-            ax.yaxis.set_major_locator(plt.MultipleLocator(500))
-            ax.grid(axis="y", linewidth=0.4, color="gray", alpha=0.4)
-        ax.set_axisbelow(True)
-        plt.tight_layout()
-        plt.savefig(os.path.join(OUT_DIR, name + suffix + ".pdf"))
-        plt.close()
+df_c, baseline_c, per_res_c, baseline_folder_c = load_data(
+    os.path.join(BASE, "data/benchmark_results/cuda_single.csv"),
+    os.path.join(BASE, "data/benchmark_results/cuda_folder.csv"),
+    CUDA_STAGES,
+)
+save_plots("cuda", df_c, baseline_c, per_res_c, baseline_folder_c, CUDA_STAGES)
 
 print("Done.")
