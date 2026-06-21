@@ -133,6 +133,7 @@ namespace
 #endif
     // ---
 
+    // Allocation function to allocate all 
     void allocate_batched_cuda_scratch(
         const BatchedContours &batch,
         BatchedContourCudaScratch &contour_scratch,
@@ -418,7 +419,6 @@ PipelineResult run_cuda(const PipelineOptions &options)
     std::vector<PieceBoundaryMask> piece_boundaries;
     std::vector<uint8_t> piece_boundary_data;
     BatchedContours batched_contours;
-    std::vector<Coordinate<float>> circle_centers;
     Signal flat_raw_radial_signal;
     Signal flat_smoothed_radial_signal;
     std::vector<Corners> batched_corner_indices;
@@ -446,7 +446,6 @@ PipelineResult run_cuda(const PipelineOptions &options)
     debug_print("[cuda pipeline] allocating CUDA buffers and uploading image");
     time_stage("CUDA setup", result.timings.cuda_setup, [&]()
                {
-        CUDA_CHECK(cudaFree(nullptr));
         d_rgb.resize(rgb_value_count);
         d_cleaned.resize(pixel_count);
         d_compact_labels.resize(pixel_count);
@@ -538,7 +537,7 @@ PipelineResult run_cuda(const PipelineOptions &options)
             PuzzlePiece piece;
             piece.region = region;
 
-            // STEP 5: Convert host boundary mask to a connected global contour.
+            // Convert host boundary mask to a connected global contour.
             // This uses Moore tracing again because angle-sorted boundary pixels
             // were not a valid connected contour for concave puzzle pieces.
             find_contour_chain_approx_simple_cuda(
@@ -581,8 +580,7 @@ PipelineResult run_cuda(const PipelineOptions &options)
     time_stage("Enclosing circle", result.timings.enclosing_circle, [&]()
                { enclosing_circle_centers_batched_cuda(
                      batched_contours,
-                     batched_contour_scratch,
-                     circle_centers); });
+                     batched_contour_scratch); });
 
     // STEP 8: Convert all smoothed contours to radial signals in one batched GPU launch.
     debug_print("[cuda pipeline] calculating radial signals");
@@ -653,39 +651,48 @@ PipelineResult run_cuda(const PipelineOptions &options)
 
     result.timings.total_seconds = total_timer.get();
 
+    // Save overlay image to output directory with "_cuda_overlays" suffix.
     const fs::path output_dir = project_path(options.output_dir);
     fs::create_directories(output_dir);
     const fs::path overlay_path = output_dir / (input_image_path.stem().string() + "_cuda_overlays.bmp");
     parallel_visualization::write_overlay_image(overlay_path.string(), width, height, rgb.get());
 
+    // Persist timings to CSV if enabled, and print summary to console if enabled.
 #if PERSIST_TIMINGS >= 1
     append_timings_csv(options, result, width, height);
 #endif
-
+    // Debug print summary of results and timings to console.
 #if DEBUG_LEVEL >= 1
     print_summary_cuda(options, result);
 #endif
 
     return result;
 }
+// ----------------------------------------------------------------------
 
+// MAIN FUNCTION FOR STANDALONE BUILD
 #ifdef CUDA_PIPELINE_BUILD_STANDALONE
 int main(int argc, char **argv)
 {
+    // Initialize Pipeline Options
     PipelineOptions options;
     if (argc > 1)
     {
+        // Read Input Path (Image or Folder)
         options.input_image_path = argv[1];
     }
     if (argc > 2)
     {
+        // Read Output Path
         options.output_dir = argv[2];
     }
 
     try
     {
+        // Load Project Path
         const fs::path input_path = project_path(options.input_image_path);
 
+        // If Input path is a folder containing images
         if (fs::is_directory(input_path))
         {
             const std::vector<fs::path> images = collect_images(input_path);
@@ -696,6 +703,8 @@ int main(int argc, char **argv)
 
             debug_print("Running CUDA pipeline on " + std::to_string(images.size()) +
                         " image(s) in: " + input_path.string());
+            // Call pipeline for all images
+            // Gives benefits of single CUDA Launch overhead
             for (const fs::path &image_path : images)
             {
                 PipelineOptions image_options = options;
@@ -703,6 +712,7 @@ int main(int argc, char **argv)
                 (void)run_cuda(image_options);
             }
         }
+        // For single image
         else if (fs::is_regular_file(input_path))
         {
             (void)run_cuda(options);

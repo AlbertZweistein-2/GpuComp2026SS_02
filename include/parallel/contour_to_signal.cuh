@@ -48,8 +48,7 @@ void smooth_contours_batched_cuda(
 
 void enclosing_circle_centers_batched_cuda(
     const BatchedContours &batch,
-    BatchedContourCudaScratch &scratch,
-    std::vector<Coordinate<float>> &centers);
+    BatchedContourCudaScratch &scratch);
 
 void radial_signals_batched_cuda(
     const BatchedContours &batch,

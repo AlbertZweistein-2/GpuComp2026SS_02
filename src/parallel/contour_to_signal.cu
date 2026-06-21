@@ -365,22 +365,18 @@ __global__ void batched_enclosing_circle_kernel(
 
 void enclosing_circle_centers_batched_cuda(
     const BatchedContours &batch,
-    BatchedContourCudaScratch &scratch,
-    std::vector<Coordinate<float>> &centers)
+    BatchedContourCudaScratch &scratch)
 {
     const std::size_t piece_count = batch.offsets.size();
-    centers.resize(piece_count);
+    scratch.centers.resize(piece_count);
     if (piece_count == 0)
     {
         return;
     }
     if (scratch.smoothed.empty())
     {
-        std::fill(centers.begin(), centers.end(), Coordinate<float>{0.0f, 0.0f});
         return;
     }
-
-    scratch.centers.resize(piece_count);
 
     // One block reduces one piece contour. The pipeline only needs the center,
     // so there is no radius reduction in the batched path.
@@ -391,8 +387,6 @@ void enclosing_circle_centers_batched_cuda(
         thrust::raw_pointer_cast(scratch.lengths.data()),
         thrust::raw_pointer_cast(scratch.centers.data()));
     CUDA_CHECK(cudaGetLastError());
-
-    thrust::copy(scratch.centers.begin(), scratch.centers.end(), centers.begin());
 }
 
 __global__ void batched_radial_signal_kernel(

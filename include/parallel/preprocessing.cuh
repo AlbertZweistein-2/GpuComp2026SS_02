@@ -4,8 +4,6 @@
 
 #include <thrust/device_vector.h>
 
-#include "types.hpp"
-
 struct PreprocessCudaScratch
 {
     thrust::device_vector<uint8_t> temp;
