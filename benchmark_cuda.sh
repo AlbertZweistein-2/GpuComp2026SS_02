@@ -6,7 +6,7 @@ PIPELINE=./build/pipeline_cuda
 OUT_DIR=data/benchmark_results
 SINGLE_CSV=$OUT_DIR/cuda_single.csv
 FOLDER_CSV=$OUT_DIR/cuda_folder.csv
-RUNS=5
+RUNS=10
 BASELINE=5100x7016
 
 RESOLUTIONS=("1024x1409" "2048x2817" "4096x5635" "5100x7016")
