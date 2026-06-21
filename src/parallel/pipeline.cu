@@ -1,3 +1,5 @@
+// ----------------------------------------------------------------------
+// COMPILE FLAGS
 #ifndef DEBUG_LEVEL
 #define DEBUG_LEVEL 0
 #endif
@@ -13,9 +15,19 @@
 #ifndef ENABLE_NVTX
 #define ENABLE_NVTX 0
 #endif
-
+// ----------------------------------------------------------------------
+// HEADER INCLUDES
 #include "parallel/pipeline.cuh"
-
+#include "helpers.hpp"
+#include "parallel/boundary_extraction.cuh"
+#include "parallel/component_labeling.cuh"
+#include "parallel/contour_to_signal.cuh"
+#include "parallel/preprocessing.cuh"
+#include "parallel/signal_analysis.cuh"
+#include "parallel/visualization.hpp"
+#include "stb_image.h"
+// ----------------------------------------------------------------------
+// STANDARD LIBRARY INCLUDES
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
@@ -30,22 +42,17 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-
+// ----------------------------------------------------------------------
+// GPU SPECIFIC INCLUDES
+#include <cuda_runtime.h>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 
 #if ENABLE_NVTX >= 1
 #include <nvtx3/nvToolsExt.h>
-#endif
+#endif // NVTX allows profiling of CUDA kernels in NVIDIA Nsight Systems and Nsight Compute.
+// ----------------------------------------------------------------------
 
-#include "helpers.hpp"
-#include "parallel/boundary_extraction.cuh"
-#include "parallel/component_labeling.cuh"
-#include "parallel/contour_to_signal.cuh"
-#include "parallel/preprocessing.cuh"
-#include "parallel/signal_analysis.cuh"
-#include "parallel/visualization.hpp"
-#include "stb_image.h"
 
 namespace fs = std::filesystem;
 
@@ -61,11 +68,12 @@ namespace
     constexpr float PEAK_MIN_SHARPNESS = 20.0f;
     constexpr int PEAK_MIN_DISTANCE = 5;
     constexpr float EDGE_TOL_FACTOR = 0.1f;
-    constexpr double REFERENCE_IMAGE_WIDTH = 5100.0;
+    constexpr double REFERENCE_IMAGE_HEIGHT = 5100.0;
 
-    int scaled_min_region_area(int width)
+    int scaled_min_region_area(int height)
+    // Scale the minimum region area based on the input image height relative to a reference height.
     {
-        const double scale = static_cast<double>(width) / REFERENCE_IMAGE_WIDTH;
+        const double scale = static_cast<double>(height) / REFERENCE_IMAGE_HEIGHT;
         return std::max(1, static_cast<int>(MIN_REGION_AREA * scale * scale + 0.5));
     }
 
@@ -84,13 +92,16 @@ namespace
         }
     };
 #endif
-
+    // Get absolute path of a file or directory
     fs::path project_path(const std::string &path)
     {
         fs::path p(path);
         return p.is_absolute() ? p : fs::current_path() / p;
     }
 
+    // ---
+    // Measure the execution time of a stage and accumulate it into the provided seconds reference.
+    // Compile-flag controlled to enable/disable NVTX ranges and timing measurements.
     template <typename Fn>
     void time_stage(const char *label, double &seconds, Fn &&fn)
     {
@@ -108,7 +119,10 @@ namespace
         fn();
 #endif
     }
+    // ---
 
+    // ---
+    // Debug print function controlled by DEBUG_LEVEL compile flag.
 #if DEBUG_LEVEL >= 1
     void debug_print(std::string_view message)
     {
@@ -117,7 +131,28 @@ namespace
 #else
 #define debug_print(message) ((void)0)
 #endif
+    // ---
 
+    void allocate_batched_cuda_scratch(
+        const BatchedContours &batch,
+        BatchedContourCudaScratch &contour_scratch,
+        SignalCudaScratch &signal_scratch)
+    {
+        const std::size_t point_count = batch.points.size();
+        const std::size_t piece_count = batch.offsets.size();
+
+        contour_scratch.points.resize(point_count);
+        contour_scratch.smoothed.resize(point_count);
+        contour_scratch.offsets.resize(piece_count);
+        contour_scratch.lengths.resize(piece_count);
+        contour_scratch.centers.resize(piece_count);
+        contour_scratch.signals.resize(point_count);
+
+        signal_scratch.smoothed.resize(point_count);
+        signal_scratch.peak_mask.resize(point_count);
+    }
+
+    // Load an RGB image from a file using stb_image.h and return a pointer to the pixel data.
     uint8_t *load_rgb_image(const fs::path &path, int &width, int &height)
     {
         int channels = 0;
@@ -129,6 +164,7 @@ namespace
         return data;
     }
 
+    // Convert the file extension of a path to lowercase for case-insensitive comparison.
     std::string lowercase_extension(const fs::path &path)
     {
         std::string extension = path.extension().string();
@@ -137,6 +173,7 @@ namespace
         return extension;
     }
 
+    // Check if a file has a supported image extension (jpg, jpeg, png, bmp, tga).
     bool is_supported_image_file(const fs::path &path)
     {
         if (!fs::is_regular_file(path))
@@ -152,6 +189,7 @@ namespace
                extension == ".tga";
     }
 
+    // Collect all supported image files from a directory and return them in a sorted vector.
     std::vector<fs::path> collect_images(const fs::path &directory)
     {
         std::vector<fs::path> images;
@@ -166,14 +204,20 @@ namespace
         std::sort(images.begin(), images.end());
         return images;
     }
-
+    
+    // ---
+    // Convert seconds to milliseconds for timing output.
 #if DEBUG_LEVEL >= 1 || PERSIST_TIMINGS >= 1
     double milliseconds(double seconds)
     {
         return seconds * 1000.0;
     }
 #endif
+    // ---
 
+
+    // ---
+    // CSV output functions for persisting timing results to a file.
 #if PERSIST_TIMINGS >= 1
     std::string env_or_empty(const char *name)
     {
@@ -253,7 +297,10 @@ namespace
             << milliseconds(result.timings.visualization) << '\n';
     }
 #endif
+    // ---
 
+    // ---
+    // Debug print function controlled by DEBUG_LEVEL compile flag.
 #if DEBUG_LEVEL >= 1
     void print_timing(const char *label, double seconds)
     {
@@ -338,9 +385,12 @@ namespace
 #endif
     }
 #endif
+    // ---
 
 } // namespace
 
+// ----------------------------------------------------------------------
+// MAIN PIPELINE FUNCTION
 PipelineResult run_cuda(const PipelineOptions &options)
 {
     const fs::path input_image_path = project_path(options.input_image_path);
@@ -358,24 +408,59 @@ PipelineResult run_cuda(const PipelineOptions &options)
     total_timer.reset();
 
     const int total_pixels = width * height;
+    const std::size_t pixel_count = static_cast<std::size_t>(total_pixels);
+    const std::size_t rgb_value_count = pixel_count * 3;
     const int min_region_area = scaled_min_region_area(height);
 
+    // Host-side pipeline state. Sizes that depend on detection results are
+    // filled as the pipeline discovers regions and contours.
+    std::vector<Region> regions;
+    std::vector<PieceBoundaryMask> piece_boundaries;
+    std::vector<uint8_t> piece_boundary_data;
+    BatchedContours batched_contours;
+    std::vector<Coordinate<float>> circle_centers;
+    Signal flat_raw_radial_signal;
+    Signal flat_smoothed_radial_signal;
+    std::vector<Corners> batched_corner_indices;
+    std::vector<EdgeLabels> batched_edge_labels;
+    const PuzzleLookupTable puzzle_lookup;
+
+    // CUDA buffers. Declaring thrust::device_vector does not allocate device
+    // memory; the resize/copy calls inside CUDA setup below do.
     thrust::device_vector<uint8_t> d_rgb;
     thrust::device_vector<uint8_t> d_cleaned;
     thrust::device_vector<int> d_compact_labels;
+    uint8_t *d_rgb_ptr = nullptr;
+    uint8_t *d_cleaned_ptr = nullptr;
+    int *d_compact_labels_ptr = nullptr;
 
-    // STEP 1b: Allocate persistent device buffers and upload the input image.
+    PreprocessCudaScratch preprocess_scratch;
+    ConnectedComponentsCudaScratch component_scratch;
+    RegionBuildCudaScratch region_build_scratch;
+    BoundaryExtractionCudaScratch boundary_scratch;
+    BatchedContourCudaScratch batched_contour_scratch;
+    SignalCudaScratch signal_scratch;
+
+    // STEP 1b: Initialize CUDA, allocate image-size CUDA buffers, and upload
+    // the input image. This is intentionally the first CUDA runtime call.
     debug_print("[cuda pipeline] allocating CUDA buffers and uploading image");
     time_stage("CUDA setup", result.timings.cuda_setup, [&]()
                {
-        d_rgb.resize(static_cast<std::size_t>(total_pixels * 3));
-        thrust::copy(rgb.get(), rgb.get() + total_pixels * 3, d_rgb.begin());
-        d_cleaned.resize(static_cast<std::size_t>(total_pixels));
-        d_compact_labels.resize(static_cast<std::size_t>(total_pixels)); });
+        CUDA_CHECK(cudaFree(nullptr));
+        d_rgb.resize(rgb_value_count);
+        d_cleaned.resize(pixel_count);
+        d_compact_labels.resize(pixel_count);
+        allocate_preprocess_cuda_scratch(width, height, preprocess_scratch);
+        allocate_component_labeling_cuda_scratch(
+            width,
+            height,
+            component_scratch,
+            region_build_scratch);
+        thrust::copy(rgb.get(), rgb.get() + rgb_value_count, d_rgb.begin());
 
-    uint8_t *d_rgb_ptr = thrust::raw_pointer_cast(d_rgb.data());
-    uint8_t *d_cleaned_ptr = thrust::raw_pointer_cast(d_cleaned.data());
-    int *d_compact_labels_ptr = thrust::raw_pointer_cast(d_compact_labels.data());
+        d_rgb_ptr = thrust::raw_pointer_cast(d_rgb.data());
+        d_cleaned_ptr = thrust::raw_pointer_cast(d_cleaned.data());
+        d_compact_labels_ptr = thrust::raw_pointer_cast(d_compact_labels.data()); });
 
     // STEP 2: Preprocess RGB image into a cleaned binary mask
     debug_print("[cuda pipeline] preprocessing and cleaning");
@@ -386,9 +471,9 @@ PipelineResult run_cuda(const PipelineOptions &options)
                      width,
                      height,
                      GAUSSIAN_KERNEL_SIZE,
-                     GAUSSIAN_SIGMA); });
+                     GAUSSIAN_SIGMA,
+                     preprocess_scratch); });
 
-    std::vector<Region> regions;
     // STEP 3: Label connected components and collect piece regions
     debug_print("[cuda pipeline] connected components");
     time_stage("Connected components", result.timings.connected_components, [&]()
@@ -397,20 +482,30 @@ PipelineResult run_cuda(const PipelineOptions &options)
             d_cleaned_ptr,
             d_compact_labels_ptr,
             width,
-            height);
+            height,
+            component_scratch);
         build_regions_from_labels_cuda(
             d_compact_labels_ptr,
             width,
             height,
             min_region_area,
+            region_build_scratch,
             regions); });
     debug_print("[cuda pipeline] found " + std::to_string(regions.size()) + " regions");
 
     result.pieces.resize(regions.size());
-    const PuzzleLookupTable puzzle_lookup;
 
-    std::vector<PieceBoundaryMask> piece_boundaries;
-    std::vector<uint8_t> piece_boundary_data;
+    BoundaryExtractionPlan boundary_plan = build_boundary_extraction_plan(
+        regions,
+        width,
+        height,
+        piece_boundaries);
+
+    // Boundary buffers depend on the discovered regions, so this setup block
+    // runs after CCL but still charges explicit CUDA allocation to CUDA setup.
+    debug_print("[cuda pipeline] allocating boundary extraction CUDA buffers");
+    time_stage("CUDA setup", result.timings.cuda_setup, [&]()
+               { allocate_boundary_extraction_cuda_scratch(boundary_plan, boundary_scratch); });
 
     // STEP 4: Extract all piece boundary masks from the compact label image
     debug_print("[cuda pipeline] extracting piece boundaries");
@@ -418,13 +513,11 @@ PipelineResult run_cuda(const PipelineOptions &options)
                {
         extract_piece_boundary_masks_from_labels_cuda(
             d_compact_labels_ptr,
-            regions,
+            boundary_plan,
+            boundary_scratch,
             width,
             height,
-            piece_boundaries,
             piece_boundary_data); });
-
-    SignalCudaScratch signal_scratch;
 
     // STEP 5: Moore tracing stays on CPU because it produces connected contour
     // order. The later CUDA stages consume these contours as one flat batch.
@@ -462,19 +555,27 @@ PipelineResult run_cuda(const PipelineOptions &options)
             result.pieces[idx] = std::move(piece);
         } });
 
-    BatchedContours batched_contours;
-    BatchedContourCudaScratch batched_contour_scratch;
+    // Pack CPU contours before allocating the contour/signal CUDA scratch; the
+    // required device sizes are only known after Moore tracing.
+    build_batched_contours(result.pieces, batched_contours);
+
+    debug_print("[cuda pipeline] allocating batched contour/signal CUDA buffers");
+    time_stage("CUDA setup", result.timings.cuda_setup, [&]()
+               {
+        allocate_batched_cuda_scratch(
+            batched_contours,
+            batched_contour_scratch,
+            signal_scratch); });
+
     // STEP 6: Smooth all contours in one batched GPU launch.
     debug_print("[cuda pipeline] smoothing contours");
     time_stage("Contour smoothing", result.timings.contour_smoothing, [&]()
                {
-        build_batched_contours(result.pieces, batched_contours);
         smooth_contours_batched_cuda(
             batched_contours,
             CONTOUR_SMOOTHING_WINDOW,
             batched_contour_scratch); });
 
-    std::vector<Coordinate<float>> circle_centers;
     // STEP 7: Approximate all enclosing circle centers in one batched GPU launch.
     debug_print("[cuda pipeline] approximating enclosing circles");
     time_stage("Enclosing circle", result.timings.enclosing_circle, [&]()
@@ -483,8 +584,6 @@ PipelineResult run_cuda(const PipelineOptions &options)
                      batched_contour_scratch,
                      circle_centers); });
 
-    Signal flat_raw_radial_signal;
-    Signal flat_smoothed_radial_signal;
     // STEP 8: Convert all smoothed contours to radial signals in one batched GPU launch.
     debug_print("[cuda pipeline] calculating radial signals");
     time_stage("Radial signal", result.timings.radial_signal, [&]()
@@ -505,7 +604,6 @@ PipelineResult run_cuda(const PipelineOptions &options)
                      flat_smoothed_radial_signal,
                      signal_scratch); });
 
-    std::vector<Corners> batched_corner_indices;
     // STEP 10: Detect corner peaks for all pieces using one batched GPU maxima pass.
     debug_print("[cuda pipeline] detecting peaks");
     time_stage("Peak detection", result.timings.peak_detection, [&]()
@@ -523,7 +621,6 @@ PipelineResult run_cuda(const PipelineOptions &options)
                      PEAK_MIN_DISTANCE,
                      batched_corner_indices); });
 
-    std::vector<EdgeLabels> batched_edge_labels;
     // STEP 11: Classify all piece edges from the flat radial signal.
     debug_print("[cuda pipeline] classifying edges");
     time_stage("Edge classification", result.timings.edge_classification, [&]()

@@ -268,34 +268,40 @@ __global__ void otsu_threshold_kernel(
 // Preprocessing stages only. Cleaning is in parallel/cleaning.cuh.
 // -----------------------------------------------------------------------------
 
+void allocate_preprocess_cuda_scratch(
+    int width,
+    int height,
+    PreprocessCudaScratch &scratch)
+{
+    const std::size_t num_pixels = static_cast<std::size_t>(width) * height;
+
+    scratch.temp.resize(num_pixels);
+    scratch.gray.resize(num_pixels);
+    scratch.blurred.resize(num_pixels);
+    scratch.hist.resize(HIST_BINS);
+    scratch.threshold.resize(1);
+    scratch.minmax.resize(2);
+}
+
 void preprocess_cuda(
     const uint8_t *d_rgb_ptr,
     uint8_t *d_cleaned_ptr,
     int width,
     int height,
     int ksize,
-    float sigma)
+    float sigma,
+    PreprocessCudaScratch &scratch)
 {
     const int num_pixels = width * height;
 
-    const size_t float_bytes = static_cast<size_t>(num_pixels) * sizeof(float);
-    const size_t binary_bytes = static_cast<size_t>(num_pixels) * sizeof(uint8_t);
-
     std::vector<float> kernel = make_gaussian_kernel(ksize, sigma);
 
-    uint8_t *d_temp = nullptr;
-    float *d_gray = nullptr;
-    float *d_blurred = nullptr;
-    uint32_t *d_hist = nullptr;
-    float *d_threshold = nullptr;
-    float *d_minmax = nullptr;
-
-    CUDA_CHECK(cudaMalloc(&d_temp, binary_bytes));
-    CUDA_CHECK(cudaMalloc(&d_gray, float_bytes));
-    CUDA_CHECK(cudaMalloc(&d_blurred, float_bytes));
-    CUDA_CHECK(cudaMalloc(&d_hist, HIST_BINS * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc(&d_threshold, sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_minmax, 2 * sizeof(float)));
+    uint8_t *d_temp = thrust::raw_pointer_cast(scratch.temp.data());
+    float *d_gray = thrust::raw_pointer_cast(scratch.gray.data());
+    float *d_blurred = thrust::raw_pointer_cast(scratch.blurred.data());
+    uint32_t *d_hist = thrust::raw_pointer_cast(scratch.hist.data());
+    float *d_threshold = thrust::raw_pointer_cast(scratch.threshold.data());
+    float *d_minmax = thrust::raw_pointer_cast(scratch.minmax.data());
 
     CUDA_CHECK(cudaMemcpyToSymbol(
         d_gaussian_kernel,
@@ -363,11 +369,4 @@ void preprocess_cuda(
         d_cleaned_ptr,
         width,
         height);
-
-    CUDA_CHECK(cudaFree(d_temp));
-    CUDA_CHECK(cudaFree(d_gray));
-    CUDA_CHECK(cudaFree(d_blurred));
-    CUDA_CHECK(cudaFree(d_hist));
-    CUDA_CHECK(cudaFree(d_threshold));
-    CUDA_CHECK(cudaFree(d_minmax));
 }

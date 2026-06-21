@@ -455,15 +455,37 @@ static void compress_labels_buf_cuda_device(
     compress_block_labels_kernel<<<grid, block>>>(d_labels, total_pixels);
 }
 
+void allocate_component_labeling_cuda_scratch(
+    int width,
+    int height,
+    ConnectedComponentsCudaScratch &components,
+    RegionBuildCudaScratch &region_build)
+{
+    const int total_pixels = width * height;
+    const int block_width = (width + 1) / 2;
+    const int block_height = (height + 1) / 2;
+    const int slot_count = block_width * block_height;
+
+    components.parents.resize(static_cast<size_t>(total_pixels));
+
+    region_build.areas.resize(static_cast<size_t>(slot_count));
+    region_build.min_x.resize(static_cast<size_t>(slot_count));
+    region_build.min_y.resize(static_cast<size_t>(slot_count));
+    region_build.max_x.resize(static_cast<size_t>(slot_count));
+    region_build.max_y.resize(static_cast<size_t>(slot_count));
+    region_build.regions.resize(static_cast<size_t>(slot_count));
+    region_build.region_count.resize(1);
+}
+
 void connected_components_buf_cuda_device(
     const uint8_t *d_binary,
     int *d_labels,
     int width,
-    int height)
+    int height,
+    ConnectedComponentsCudaScratch &scratch)
 {
     const int total_pixels = width * height;
-    thrust::device_vector<int> d_parents(static_cast<size_t>(total_pixels));
-    int *d_parent_ptr = thrust::raw_pointer_cast(d_parents.data());
+    int *d_parent_ptr = thrust::raw_pointer_cast(scratch.parents.data());
 
     init_labels_buf_cuda_device(d_binary, d_parent_ptr, width, height);
     union_labels_buf_cuda_device(d_binary, d_parent_ptr, width, height);
@@ -485,6 +507,7 @@ void build_regions_from_labels_cuda(
     int width,
     int height,
     int min_area,
+    RegionBuildCudaScratch &scratch,
     std::vector<Region> &regions)
 {
     const int total_pixels = width * height;
@@ -495,21 +518,13 @@ void build_regions_from_labels_cuda(
     const int pixel_grid = (total_pixels + block - 1) / block;
     const int slot_grid = (slot_count + block - 1) / block;
 
-    thrust::device_vector<int> d_areas(static_cast<size_t>(slot_count));
-    thrust::device_vector<int> d_min_x(static_cast<size_t>(slot_count));
-    thrust::device_vector<int> d_min_y(static_cast<size_t>(slot_count));
-    thrust::device_vector<int> d_max_x(static_cast<size_t>(slot_count));
-    thrust::device_vector<int> d_max_y(static_cast<size_t>(slot_count));
-    thrust::device_vector<Region> d_regions(static_cast<size_t>(slot_count));
-    thrust::device_vector<int> d_region_count(1);
-
-    int *d_area_ptr = thrust::raw_pointer_cast(d_areas.data());
-    int *d_min_x_ptr = thrust::raw_pointer_cast(d_min_x.data());
-    int *d_min_y_ptr = thrust::raw_pointer_cast(d_min_y.data());
-    int *d_max_x_ptr = thrust::raw_pointer_cast(d_max_x.data());
-    int *d_max_y_ptr = thrust::raw_pointer_cast(d_max_y.data());
-    Region *d_region_ptr = thrust::raw_pointer_cast(d_regions.data());
-    int *d_region_count_ptr = thrust::raw_pointer_cast(d_region_count.data());
+    int *d_area_ptr = thrust::raw_pointer_cast(scratch.areas.data());
+    int *d_min_x_ptr = thrust::raw_pointer_cast(scratch.min_x.data());
+    int *d_min_y_ptr = thrust::raw_pointer_cast(scratch.min_y.data());
+    int *d_max_x_ptr = thrust::raw_pointer_cast(scratch.max_x.data());
+    int *d_max_y_ptr = thrust::raw_pointer_cast(scratch.max_y.data());
+    Region *d_region_ptr = thrust::raw_pointer_cast(scratch.regions.data());
+    int *d_region_count_ptr = thrust::raw_pointer_cast(scratch.region_count.data());
 
     CUDA_CHECK(cudaMemset(d_region_count_ptr, 0, sizeof(int)));
 

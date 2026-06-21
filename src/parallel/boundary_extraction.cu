@@ -14,18 +14,6 @@
 
 namespace
 {
-struct BoundaryBox
-{
-    // Cropped bounding box around one region.
-    // The kernels use this to avoid scanning the full image once per piece.
-    int label;
-    int x0;
-    int y0;
-    int width;
-    int height;
-    std::size_t data_offset;
-};
-
 // Checks whether a pixel belongs to the requested component and touches
 // background or another component in its 8-neighborhood.
 // Such pixels form the outer boundary mask for that piece.
@@ -95,24 +83,17 @@ __global__ void fill_piece_boundary_masks_kernel(
 }
 } // namespace
 
-void extract_piece_boundary_masks_from_labels_cuda(
-    const int *d_labels,
+BoundaryExtractionPlan build_boundary_extraction_plan(
     const std::vector<Region> &regions,
     int image_width,
     int image_height,
-    std::vector<PieceBoundaryMask> &boundaries,
-    std::vector<uint8_t> &boundary_data)
+    std::vector<PieceBoundaryMask> &boundaries)
 {
-    // Build one small host-side descriptor per region. This is cheap compared
-    // to scanning the full image and lets the device kernels process all pieces
-    // in one batched launch.
-    std::vector<BoundaryBox> boxes;
-    boxes.reserve(regions.size());
+    BoundaryExtractionPlan plan;
+    plan.boxes.reserve(regions.size());
     boundaries.clear();
     boundaries.reserve(regions.size());
 
-    std::size_t total_boundary_pixels = 0;
-    std::size_t max_boundary_pixels = 0;
     for (const Region &region : regions)
     {
         const int x0 = std::max(0, region.x - 1);
@@ -124,45 +105,66 @@ void extract_piece_boundary_masks_from_labels_cuda(
         const int boundary_height = y1 - y0;
         const std::size_t boundary_size = static_cast<std::size_t>(boundary_width) * boundary_height;
 
-        boxes.push_back(BoundaryBox{
+        plan.boxes.push_back(BoundaryBox{
             region.label,
             x0,
             y0,
             boundary_width,
             boundary_height,
-            total_boundary_pixels});
+            plan.total_boundary_pixels});
         boundaries.push_back(PieceBoundaryMask{
             boundary_width,
             boundary_height,
-            total_boundary_pixels,
+            plan.total_boundary_pixels,
             Coordinate<int>{x0, y0}});
-        total_boundary_pixels += boundary_size;
-        max_boundary_pixels = std::max(max_boundary_pixels, boundary_size);
+        plan.total_boundary_pixels += boundary_size;
+        plan.max_boundary_pixels = std::max(plan.max_boundary_pixels, boundary_size);
     }
 
+    return plan;
+}
+
+void allocate_boundary_extraction_cuda_scratch(
+    const BoundaryExtractionPlan &plan,
+    BoundaryExtractionCudaScratch &scratch)
+{
+    scratch.boxes = plan.boxes;
+    scratch.boundary_data.resize(plan.total_boundary_pixels);
+}
+
+void extract_piece_boundary_masks_from_labels_cuda(
+    const int *d_labels,
+    const BoundaryExtractionPlan &plan,
+    BoundaryExtractionCudaScratch &scratch,
+    int image_width,
+    int image_height,
+    std::vector<uint8_t> &boundary_data)
+{
     boundary_data.clear();
-    if (boxes.empty() || max_boundary_pixels == 0)
+    if (plan.boxes.empty() || plan.max_boundary_pixels == 0)
     {
         return;
     }
 
-    thrust::device_vector<BoundaryBox> d_boxes(boxes.begin(), boxes.end());
-    thrust::device_vector<uint8_t> d_boundary_data(total_boundary_pixels, 0);
+    CUDA_CHECK(cudaMemset(
+        thrust::raw_pointer_cast(scratch.boundary_data.data()),
+        0,
+        plan.total_boundary_pixels * sizeof(uint8_t)));
 
     // We launch one grid row per piece. The x dimension is sized by the largest
     // cropped box, so smaller boxes exit early once local_idx exceeds their area.
     const int block = 256;
     const dim3 grid(
-        static_cast<unsigned int>((max_boundary_pixels + block - 1) / block),
-        static_cast<unsigned int>(boxes.size()));
+        static_cast<unsigned int>((plan.max_boundary_pixels + block - 1) / block),
+        static_cast<unsigned int>(plan.boxes.size()));
     fill_piece_boundary_masks_kernel<<<grid, block>>>(
         d_labels,
-        thrust::raw_pointer_cast(d_boxes.data()),
-        thrust::raw_pointer_cast(d_boundary_data.data()),
+        thrust::raw_pointer_cast(scratch.boxes.data()),
+        thrust::raw_pointer_cast(scratch.boundary_data.data()),
         image_width,
         image_height);
     CUDA_CHECK(cudaGetLastError());
 
-    boundary_data.resize(total_boundary_pixels);
-    thrust::copy(d_boundary_data.begin(), d_boundary_data.end(), boundary_data.begin());
+    boundary_data.resize(plan.total_boundary_pixels);
+    thrust::copy(scratch.boundary_data.begin(), scratch.boundary_data.end(), boundary_data.begin());
 }
