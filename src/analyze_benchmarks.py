@@ -466,4 +466,75 @@ for suffix, figsize in [("_report", (6, 4)), ("_presentation", (10, 6))]:
     plt.savefig(os.path.join(OUT_DIR, f"speedup{suffix}.pdf"))
     plt.close()
 
+
+def plot_transfer_overhead(ax):
+    stages = [
+        "CUDA setup",
+        "Preprocessing",
+        "Connected components",
+        "Boundary extraction",
+        "Contour extraction",
+        "Contour smoothing",
+        "Enclosing circle",
+        "Radial signal",
+        "Signal smoothing",
+        "Peak detection",
+        "Edge classification",
+        "Visualization",
+    ]
+    compute = [
+        8.54,
+        21.83,
+        46.71,
+        1.68,
+        0.0,
+        0.010,
+        0.007,
+        0.006,
+        0.009,
+        0.006,
+        0.0,
+        0.0,
+    ]
+    htod = [11.868, 0.001, 0.0, 0.0, 0.0, 0.042, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    dtoh = [0.0, 0.002, 0.005, 2.083, 0.0, 0.0, 0.0, 0.031, 0.031, 0.021, 0.0, 0.0]
+
+    eps = 1e-4
+    y = np.arange(len(stages))
+    bar_h = 0.25
+
+    ax.barh(
+        y - bar_h,
+        [max(v, eps) for v in compute],
+        height=bar_h,
+        color="#1f77b4",
+        label="compute",
+    )
+    ax.barh(y, [max(v, eps) for v in htod], height=bar_h, color="#ff7f0e", label="HtoD")
+    ax.barh(
+        y + bar_h,
+        [max(v, eps) for v in dtoh],
+        height=bar_h,
+        color="#2ca02c",
+        label="DtoH",
+    )
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(stages)
+    ax.set_xlabel("Runtime (ms)")
+    ax.set_xscale("log")
+    ax.set_xlim(left=1e-4)
+    ax.invert_yaxis()
+    ax.legend(fontsize=7)
+    ax.grid(axis="x", linewidth=0.4, color="gray", alpha=0.4)
+    ax.set_axisbelow(True)
+
+
+for suffix, figsize in [("_report", (6, 4)), ("_presentation", (10, 6))]:
+    fig, ax = plt.subplots(figsize=figsize)
+    plot_transfer_overhead(ax)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, f"transfer_overhead{suffix}.pdf"))
+    plt.close()
+
 print("Done.")
