@@ -69,7 +69,7 @@ def load_data(single_csv, folder_csv, stages):
         .median()
         .reset_index()
     )
-    return baseline, per_res, baseline_folder
+    return baseline, per_res, baseline_folder, per_image
 
 
 def make_colors(stages, overrides=None):
@@ -87,49 +87,43 @@ def make_colors(stages, overrides=None):
 
 
 def plot_stages_vs_res(ax, per_res, stages, stage_color):
-    x = per_res["pixels"].values
+    x = per_res["resolution"].values
     cumsum = np.zeros(len(x))
     for stage in stages:
         y = per_res[stage].values
-        new_cumsum = cumsum + y
-        ax.fill_between(
+        ax.bar(
             x,
-            cumsum,
-            new_cumsum,
-            alpha=0.15,
+            y,
+            bottom=cumsum,
             color=stage_color[stage],
+            alpha=0.8,
             label=stage.replace("_ms", ""),
         )
-        ax.plot(x, new_cumsum, alpha=0.5, color=stage_color[stage])
-        ax.scatter(x, new_cumsum, color=stage_color[stage], s=20, zorder=3)
-        cumsum = new_cumsum
+        cumsum += y
     ax.set_xlabel("Image size")
     ax.set_ylabel("Runtime (ms)")
-    ax.set_xticks(x)
-    ax.set_xticklabels(per_res["resolution"], rotation=15, ha="right")
+    ax.tick_params(axis="x", rotation=15)
     ax.legend(fontsize=7, ncols=2)
 
 
 def plot_stages_vs_pieces(ax, baseline, stages, stage_color):
     sub = baseline.sort_values("pieces")
-    x = sub["pieces"].values
-    cumsum = np.zeros(len(x))
+    x = sub["pieces"].astype(str).values
+    cumsum = np.zeros(len(sub))
     for stage in stages:
         y = sub[stage].values
-        new_cumsum = cumsum + y
-        ax.fill_between(
+        ax.bar(
             x,
-            cumsum,
-            new_cumsum,
-            alpha=0.15,
+            y,
+            bottom=cumsum,
             color=stage_color[stage],
+            alpha=0.8,
             label=stage.replace("_ms", ""),
         )
-        ax.plot(x, new_cumsum, alpha=0.5, color=stage_color[stage])
-        ax.scatter(x, new_cumsum, color=stage_color[stage], s=20, zorder=3)
-        cumsum = new_cumsum
+        cumsum += y
     ax.set_xlabel("Number of pieces")
     ax.set_ylabel("Runtime (ms)")
+    ax.tick_params(axis="x", rotation=45, labelsize=6)
     ax.legend(fontsize=7, ncols=2)
 
 
@@ -172,12 +166,12 @@ def plot_mode_comparison(ax, baseline, baseline_folder, stages, stage_color):
 
 
 def plot_mode_comparison_stacked(ax, baseline, baseline_folder, stages, stage_color):
-    means_single = baseline[stages].median()
-    means_folder = baseline_folder[stages].median()
+    med_single = baseline[stages].median()
+    med_folder = baseline_folder[stages].median()
     x = ["single", "folder"]
     cumsum = np.zeros(2)
     for stage in stages:
-        vals = np.array([means_single[stage], means_folder[stage]])
+        vals = np.array([med_single[stage], med_folder[stage]])
         ax.bar(
             x,
             vals,
@@ -259,14 +253,14 @@ def save_plots(
             plt.close()
 
 
-baseline_s, per_res_s, baseline_folder_s = load_data(
+baseline_s, per_res_s, baseline_folder_s, per_image_s = load_data(
     os.path.join(BASE, "data/benchmark_results/serial_single.csv"),
     os.path.join(BASE, "data/benchmark_results/serial_folder.csv"),
     SERIAL_STAGES,
 )
 save_plots("serial", baseline_s, per_res_s, baseline_folder_s, SERIAL_STAGES)
 
-baseline_c, per_res_c, baseline_folder_c = load_data(
+baseline_c, per_res_c, baseline_folder_c, per_image_c = load_data(
     os.path.join(BASE, "data/benchmark_results/cuda_single.csv"),
     os.path.join(BASE, "data/benchmark_results/cuda_folder.csv"),
     CUDA_STAGES,
@@ -340,6 +334,79 @@ def plot_combined_mode_comparison(
     ax.set_axisbelow(True)
     ax.legend(fontsize=7)
 
+
+def plot_combined_vs_res(ax, per_res_s, per_res_c):
+    resolutions = per_res_s["resolution"].values
+    x = np.arange(len(resolutions))
+    bar_w = 0.35
+    ax.bar(
+        x - bar_w / 2,
+        per_res_s["total_ms"].values,
+        width=bar_w,
+        color="#1f77b4",
+        label="serial",
+    )
+    ax.bar(
+        x + bar_w / 2,
+        per_res_c["total_ms"].values,
+        width=bar_w,
+        color="#ff7f0e",
+        label="cuda",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(resolutions, rotation=15, ha="right")
+    ax.set_xlabel("Image size")
+    ax.set_ylabel("Runtime (ms)")
+    ax.legend(fontsize=7)
+
+
+for suffix, figsize in [("_report", (6, 4)), ("_presentation", (10, 6))]:
+    fig, ax = plt.subplots(figsize=figsize)
+    plot_combined_vs_res(ax, per_res_s, per_res_c)
+    ax.set_yscale("log")
+    ax.grid(axis="y", linewidth=0.4, color="gray", alpha=0.4)
+    ax.set_axisbelow(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, f"combined_vs_res{suffix}.pdf"))
+    plt.close()
+
+
+def plot_combined_vs_pieces(ax, baseline_s, baseline_c):
+    sub_s = baseline_s.sort_values("pieces")
+    sub_c = baseline_c.sort_values("pieces")
+    pieces = sub_s["pieces"].astype(str).values
+    x = np.arange(len(pieces))
+    bar_w = 0.35
+    ax.bar(
+        x - bar_w / 2,
+        sub_s["total_ms"].values,
+        width=bar_w,
+        color="#1f77b4",
+        label="serial",
+    )
+    ax.bar(
+        x + bar_w / 2,
+        sub_c["total_ms"].values,
+        width=bar_w,
+        color="#ff7f0e",
+        label="cuda",
+    )
+    ax.set_xticks(x)
+    ax.set_xticklabels(pieces, rotation=45, ha="right", fontsize=6)
+    ax.set_xlabel("Number of pieces")
+    ax.set_ylabel("Runtime (ms)")
+    ax.legend(fontsize=7)
+
+
+for suffix, figsize in [("_report", (6, 4)), ("_presentation", (10, 6))]:
+    fig, ax = plt.subplots(figsize=figsize)
+    plot_combined_vs_pieces(ax, baseline_s, baseline_c)
+    ax.set_yscale("log")
+    ax.grid(axis="y", linewidth=0.4, color="gray", alpha=0.4)
+    ax.set_axisbelow(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(OUT_DIR, f"combined_vs_pieces{suffix}.pdf"))
+    plt.close()
 
 for suffix, figsize in [("_report", (6, 4)), ("_presentation", (10, 6))]:
     fig, ax = plt.subplots(figsize=figsize)
