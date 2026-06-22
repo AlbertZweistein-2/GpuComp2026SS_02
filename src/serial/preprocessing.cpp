@@ -252,7 +252,7 @@ void preprocess(
     compute_histogram(blurred, hist);
 
     // 4b — Otsu
-    const float threshold = otsu_threshold(hist, width * height);
+    const float threshold = otsu_threshold(hist, width * height) - 15.0f;
 
     // 5 — Binarization
     std::vector<uint8_t> binary;

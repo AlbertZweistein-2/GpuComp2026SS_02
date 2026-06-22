@@ -44,8 +44,8 @@ namespace {
 // Naive serial baseline parameters. These intentionally stay close to the CUDA
 // pipeline constants so behavior and timings can be compared stage by stage.
 constexpr int GAUSSIAN_KERNEL_SIZE = 5;
-constexpr float GAUSSIAN_SIGMA = 1.0f;
-constexpr int MIN_REGION_AREA = 2000;
+constexpr float GAUSSIAN_SIGMA = 1.4f;
+constexpr int MIN_REGION_AREA = 45000;
 constexpr int CONTOUR_SMOOTHING_WINDOW = 5;
 constexpr int PEAK_SMOOTHING_WINDOW = 5;
 constexpr float PEAK_MIN_PROMINENCE = 5.0f;

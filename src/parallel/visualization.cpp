@@ -75,6 +75,27 @@ inline void set_pixel(uint8_t* img, int width, int height,
     img[idx + 2] = b;
 }
 
+inline void set_pixel_brush(uint8_t* img, int width, int height,
+                            int x, int y, uint8_t r, uint8_t g, uint8_t b,
+                            int thickness)
+{
+    if (thickness <= 1)
+    {
+        set_pixel(img, width, height, x, y, r, g, b);
+        return;
+    }
+
+    const int start = -(thickness / 2);
+    const int end = start + thickness;
+    for (int dy = start; dy < end; ++dy)
+    {
+        for (int dx = start; dx < end; ++dx)
+        {
+            set_pixel(img, width, height, x + dx, y + dy, r, g, b);
+        }
+    }
+}
+
 // ______________________________________________________________________________________________
 
 // Bresenham's line algorithm
@@ -83,8 +104,11 @@ inline void set_pixel(uint8_t* img, int width, int height,
 // GPU overhead would likely dominate
 void draw_line(uint8_t* img, int width, int height,
                int x0, int y0, int x1, int y1,
-               uint8_t r, uint8_t g, uint8_t b)
+               uint8_t r, uint8_t g, uint8_t b,
+               int thickness = 1)
 {
+    thickness = std::max(1, thickness);
+
     // dx and dy are the absolute distances between the two points in x and y
     // sx and sy are the step directions in x and y
     int dx = std::abs(x1 - x0);
@@ -118,7 +142,7 @@ void draw_line(uint8_t* img, int width, int height,
     {
         // Clipping is handled in set_pixel, so lines may extend outside the
         // image without special-case logic here.
-        set_pixel(img, width, height, x0, y0, r, g, b);
+        set_pixel_brush(img, width, height, x0, y0, r, g, b, thickness);
 
         // while we have not reached the end point
         if (x0 == x1 && y0 == y1)
@@ -153,11 +177,11 @@ void draw_rect(uint8_t* img, int width, int height,
 {
     for (int t = 0; t < thickness; ++t)
     {
-        // Draw inward offsets for thickness instead of filling the rectangle.
-        draw_line(img, width, height, x+t,   y+t,   x+w-t, y+t,   r, g, b);
-        draw_line(img, width, height, x+w-t, y+t,   x+w-t, y+h-t, r, g, b);
-        draw_line(img, width, height, x+w-t, y+h-t, x+t,   y+h-t, r, g, b);
-        draw_line(img, width, height, x+t,   y+h-t, x+t,   y+t,   r, g, b);
+        // Draw outward offsets so the box does not cover pixels inside the region.
+        draw_line(img, width, height, x-t,   y-t,   x+w+t, y-t,   r, g, b);
+        draw_line(img, width, height, x+w+t, y-t,   x+w+t, y+h+t, r, g, b);
+        draw_line(img, width, height, x+w+t, y+h+t, x-t,   y+h+t, r, g, b);
+        draw_line(img, width, height, x-t,   y+h+t, x-t,   y-t,   r, g, b);
     }
 }
 
@@ -308,6 +332,8 @@ void render_piece_overlays(
             const PuzzlePiece& piece = pieces[static_cast<size_t>(piece_idx)];
             const Region& region = piece.region;
             const CoordinateVector<int>& contour = piece.contour;
+            const int line_thickness_contour = std::max(1, static_cast<int>(1.0f * static_cast<float>(height) / 5100.0f + 0.5f));
+            const int line_thickness_rect = std::max(1, static_cast<int>(3.0f * static_cast<float>(height) / 5100.0f + 0.5f));
 
             // drawing the contour in red
             // contour points are (x, y) again after the coordinate swap in find_contour_chain_approx_simple
@@ -319,18 +345,18 @@ void render_piece_overlays(
                 draw_line(rgb_data, width, height,
                           contour[i].a,    contour[i].b,
                           contour[next].a, contour[next].b,
-                          255, 0, 0);
+                          255, 0, 0, line_thickness_contour);
             }
 
             // drawing the bounding box in light green
             draw_rect(rgb_data, width, height,
                       region.x, region.y, region.width, region.height,
-                      144, 238, 144, 2);
+                      144, 238, 144, line_thickness_rect);
 
             // drawing the label text in white above the bounding box
             std::string piece_label;
             piece_label = piece.class_label;
-            std::string text = "Piece " + std::to_string(piece_idx + 1) + " ; Class " + piece_label;
+            std::string text = "P. " + std::to_string(piece_idx + 1) + " ; Class " + piece_label;
             // Position labels above the box when possible, clamping to the
             // image boundary so top-edge pieces still get visible labels.
             int text_y = std::max(0, region.y - static_cast<int>(label_font_size + label_padding));

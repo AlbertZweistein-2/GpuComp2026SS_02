@@ -46,7 +46,7 @@ __global__ void binarize_erode_tiled_kernel(
     const int tile_area = tile_width * tile_height;
     const int thread_id = threadIdx.y * blockDim.x + threadIdx.x;
     const int threads_per_block = blockDim.x * blockDim.y;
-    const float threshold_value = *threshold;
+    const float threshold_value = *threshold - 15.0f;
 
     extern __shared__ uint8_t tile[];
     for (int idx = thread_id; idx < tile_area; idx += threads_per_block)

@@ -60,9 +60,9 @@ namespace
 {
     // Algorithm parameters shared across the CUDA pipeline. Most of these
     // mirror the serial pipeline so performance changes are easier to compare.
-    constexpr int GAUSSIAN_KERNEL_SIZE = 3; // KSize must be odd and >= 3!
-    constexpr float GAUSSIAN_SIGMA = 1.0f;
-    constexpr int MIN_REGION_AREA = 2000;
+    constexpr int GAUSSIAN_KERNEL_SIZE = 5; // KSize must be odd and >= 3!
+    constexpr float GAUSSIAN_SIGMA = 1.4f;
+    constexpr int MIN_REGION_AREA = 45000;
     constexpr int CONTOUR_SMOOTHING_WINDOW = 5;
     constexpr int PEAK_SMOOTHING_WINDOW = 5;
     constexpr float PEAK_MIN_PROMINENCE = 5.0f;
