@@ -7,8 +7,6 @@
 //  BUF reduces the number of labels and memory accesses by processing blocks instead of individual pixels. 
 // This made it a suitable replacement for our propagation-based approach.
 
-// Then cite the paper and mention YACCLAB as benchmark/source-code evidence.
-
 //Paper: https://www.federicobolelli.it/media/publications/pdfs/2019iciap_labeling.pdf
 //Github: https://github.com/prittt/YACCLAB/tree/master
 
